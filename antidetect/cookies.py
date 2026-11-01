@@ -406,7 +406,7 @@ def _insert_cookie(conn, columns, cookie):
     )
 
 
-def update_cookies(profile_id, cookie):
+def update_cookies(profile_id, cookie, preserve_sessions=True):
     profile_id = int(profile_id)
     _require_closed(profile_id)
     items = _cookie_list(cookie)
@@ -428,7 +428,11 @@ def update_cookies(profile_id, cookie):
             _create_schema(conn)
             columns = _columns(conn)
             if not items:
-                conn.execute("DELETE FROM cookies")
+                if cookie == [] and not preserve_sessions:
+                    conn.execute("DELETE FROM cookies")
+                else:
+                    conn.rollback()
+                    return True
             else:
                 for item in items:
                     _insert_cookie(conn, columns, item)

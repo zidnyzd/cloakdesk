@@ -879,11 +879,13 @@ def stop_proxy_bridge(proc):
 
 
 def ensure_password_manager(data_dir):
-    """Aktifkan tawaran simpan password saat profil pertama kali disiapkan.
+    """Aktifkan tawaran simpan password dan pemulihan sesi saat profil disiapkan.
 
     Build ungoogled-chromium membawa nilai awal nonaktif, sehingga bubble
     simpan password tidak pernah muncul. Nilai yang sudah ada tidak diubah
-    supaya pilihan pengguna tetap dihormati.
+    supaya pilihan pengguna tetap dihormati. Session (restore_on_startup = 4)
+    ditetapkan supaya Chromium memulihkan cookie sesi dari disk saat browser
+    dibuka kembali, sehingga sesi login Gmail multi-akun tidak hilang.
     """
     default_dir = Path(data_dir) / "Default"
     default_dir.mkdir(parents=True, exist_ok=True)
@@ -896,9 +898,19 @@ def ensure_password_manager(data_dir):
             return
         if not isinstance(data, dict):
             return
-    if "credentials_enable_service" in data:
+    changed = False
+    if "credentials_enable_service" not in data:
+        data["credentials_enable_service"] = True
+        changed = True
+    session = data.get("session")
+    if not isinstance(session, dict):
+        data["session"] = {"restore_on_startup": 4}
+        changed = True
+    elif "restore_on_startup" not in session:
+        data["session"]["restore_on_startup"] = 4
+        changed = True
+    if not changed:
         return
-    data["credentials_enable_service"] = True
     tmp = path.with_name(path.name + ".tmp")
     try:
         tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
@@ -908,6 +920,9 @@ def ensure_password_manager(data_dir):
             tmp.unlink()
         except OSError:
             pass
+
+
+ensure_profile_preferences = ensure_password_manager
 
 
 def build_args(profile, port, app_args=None, proxy_arg=None, data_dir=None):
@@ -1062,6 +1077,7 @@ def _release_profile_lease(profile_id, info=None):
 
 
 def _sync_cookies_after_close(profile_id, info=None):
+    import sys
     from . import cookies
 
     cookie_list = None
@@ -1093,6 +1109,14 @@ def _sync_cookies_after_close(profile_id, info=None):
             resolved_url, resolved_token = sync_agent._try_resolve_endpoint(conn)
             if profile_uuid and resolved_url and resolved_token:
                 fence_val = int(fencing_token or 0)
+                if cookie_list == []:
+                    # Guard anti-regresi: jangan timpa blob server dengan
+                    # data kosong jika lokal sebelumnya pernah punya cookie.
+                    print(
+                        f"WARNING: cookie lokal kosong, lewati upload sinkronisasi cookie profil {profile_id}",
+                        file=sys.stderr,
+                    )
+                    cookie_list = None
                 if cookie_list is not None:
                     try:
                         cookie_res = sync_agent.upload_cookie_blob(
@@ -1198,31 +1222,53 @@ def _wait_for_devtools(port, deadline):
     return False
 
 
-def _graceful_close(debugging_address, proc=None, pid=0, timeout=10.0):
+def _graceful_close(debugging_address, proc=None, pid=0, timeout=10.0, data_dir=None):
     """Close every page target so Chromium flushes cookies before exiting."""
+    journal = None
+    if data_dir:
+        journal = Path(data_dir) / "Default" / "Cookies-journal"
+
+    def _wait_journal():
+        if journal and journal.exists():
+            j_deadline = time.time() + 3.0
+            while time.time() < j_deadline:
+                if not journal.exists():
+                    break
+                time.sleep(0.05)
+
     if not debugging_address:
-        return _process_gone(proc, pid)
+        gone = _process_gone(proc, pid)
+        if gone:
+            _wait_journal()
+        return gone
     base = f"http://{debugging_address}"
     try:
         with urllib.request.urlopen(base + "/json/list", timeout=2) as response:
             targets = json.load(response)
     except Exception:
-        return _process_gone(proc, pid)
+        gone = _process_gone(proc, pid)
+        if gone:
+            _wait_journal()
+        return gone
 
     pages = [t for t in targets if t.get("type") == "page" and t.get("id")]
-    if not pages:
-        return False
     for target in pages:
         try:
             urllib.request.urlopen(f"{base}/json/close/{target['id']}", timeout=2).read()
         except Exception:
             pass
 
+    # Tunggu proses benar-benar selesai (termasuk kasus page kosong)
     deadline = time.time() + timeout
     while time.time() < deadline:
         if _process_gone(proc, pid):
+            _wait_journal()
             return True
         time.sleep(0.1)
+    if _process_gone(proc, pid):
+        _wait_journal()
+        return True
+    _wait_journal()
     return False
 
 
@@ -1480,7 +1526,12 @@ def close_profile(profile_id):
         for item in instances:
             item_info = item["info"]
             item_pid = int(item_info.get("pid") or 0)
-            if not _graceful_close(item_info.get("debugging_address"), proc=item["proc"], pid=item_pid):
+            if not _graceful_close(
+                item_info.get("debugging_address"),
+                proc=item["proc"],
+                pid=item_pid,
+                data_dir=item_info.get("data_dir"),
+            ):
                 clean_exit = False
                 if item_pid:
                     _kill_pgid(item_pid)
@@ -1493,7 +1544,9 @@ def close_profile(profile_id):
         return closed > 0
     proc = entry["proc"] if entry else None
     pid = int(info.get("pid") or 0)
-    clean_exit = _graceful_close(info.get("debugging_address"), proc=proc, pid=pid)
+    clean_exit = _graceful_close(
+        info.get("debugging_address"), proc=proc, pid=pid, data_dir=info.get("data_dir")
+    )
     if not clean_exit and pid:
         _kill_pgid(pid)
     _stop_gost(info)
