@@ -4,6 +4,7 @@ export const ACCOUNT_PRESETS = [
   { key: 'Facebook', site_id: 1, site_url: 'https://www.facebook.com/' },
   { key: 'TikTok', site_id: 2, site_url: 'https://www.tiktok.com/' },
   { key: 'Instagram', site_id: 3, site_url: 'https://www.instagram.com/' },
+  { key: 'Threads', site_id: 8, site_url: 'https://www.threads.net/' },
   { key: 'Shopee', site_id: 4, site_url: 'https://shopee.co.id/' },
   { key: 'Tokopedia', site_id: 5, site_url: 'https://www.tokopedia.com/' },
   { key: 'Google', site_id: 6, site_url: 'https://www.google.com/' },
@@ -25,6 +26,7 @@ export function accountKey(siteId, siteUrl) {
   const byId = ACCOUNT_PRESETS.find((preset) => preset.site_id === id)
   if (byId && (!host || host === hostOf(byId.site_url))) return byId.key
   if (host) {
+    if (host === 'threads.net' || host === 'threads.com') return 'Threads'
     const byUrl = ACCOUNT_PRESETS.find((preset) => hostOf(preset.site_url) === host)
     if (byUrl) return byUrl.key
   }

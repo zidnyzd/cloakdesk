@@ -23,6 +23,8 @@ PLATFORM_PRIORITY = (
     ("facebook.com", 1, "https://www.facebook.com/"),
     ("tiktok.com", 2, "https://www.tiktok.com/"),
     ("instagram.com", 3, "https://www.instagram.com/"),
+    ("threads.net", 8, "https://www.threads.net/"),
+    ("threads.com", 8, "https://www.threads.net/"),
     ("shopee.co.id", 4, "https://shopee.co.id/"),
     ("tokopedia.com", 5, "https://www.tokopedia.com/"),
     ("lazada.co.id", 7, "https://www.lazada.co.id/"),
