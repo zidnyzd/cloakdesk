@@ -883,9 +883,11 @@ def ensure_password_manager(data_dir):
 
     Build ungoogled-chromium membawa nilai awal nonaktif, sehingga bubble
     simpan password tidak pernah muncul. Nilai yang sudah ada tidak diubah
-    supaya pilihan pengguna tetap dihormati. Session (restore_on_startup = 4)
-    ditetapkan supaya Chromium memulihkan cookie sesi dari disk saat browser
-    dibuka kembali, sehingga sesi login Gmail multi-akun tidak hilang.
+    supaya pilihan pengguna tetap dihormati. Session (restore_on_startup = 1
+    / SessionStartupPref::LAST) ditetapkan supaya Chromium memulihkan cookie
+    sesi dari disk saat browser dibuka kembali, sehingga sesi login Gmail
+    multi-akun tidak hilang. Nilai 4 secara empirik gagal memulihkan cookie,
+    sehingga mulai ditukar dengan migrasi ke 1.
     """
     default_dir = Path(data_dir) / "Default"
     default_dir.mkdir(parents=True, exist_ok=True)
@@ -904,10 +906,13 @@ def ensure_password_manager(data_dir):
         changed = True
     session = data.get("session")
     if not isinstance(session, dict):
-        data["session"] = {"restore_on_startup": 4}
+        data["session"] = {"restore_on_startup": 1}
         changed = True
     elif "restore_on_startup" not in session:
-        data["session"]["restore_on_startup"] = 4
+        data["session"]["restore_on_startup"] = 1
+        changed = True
+    elif session.get("restore_on_startup") == 4:
+        data["session"]["restore_on_startup"] = 1
         changed = True
     if not changed:
         return
@@ -1258,8 +1263,39 @@ def _graceful_close(debugging_address, proc=None, pid=0, timeout=10.0, data_dir=
         except Exception:
             pass
 
+    # Kirim Browser.close melalui CDP websocket agar proses Chromium keluar
+    # sendiri dan menulis cookie sesi ke disk. Kegagalan websocket tidak
+    # boleh membuat penutupan gagal total; fallback ke perilaku lama.
+    t0 = time.time()
+    try:
+        with urllib.request.urlopen(base + "/json/version", timeout=2) as response:
+            version_info = json.load(response)
+        ws_url = version_info.get("webSocketDebuggerUrl")
+        if ws_url:
+            try:
+                import websocket as _ws_client
+                ws = _ws_client.create_connection(ws_url, timeout=3)
+                try:
+                    ws.send(json.dumps({"id": 1, "method": "Browser.close"}))
+                    try:
+                        ws.settimeout(1)
+                        ws.recv()
+                    except Exception:
+                        pass
+                finally:
+                    try:
+                        ws.close()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     # Tunggu proses benar-benar selesai (termasuk kasus page kosong)
-    deadline = time.time() + timeout
+    # dengan sisa waktu dari parameter timeout.
+    remaining = max(0.0, timeout - (time.time() - t0))
+    deadline = time.time() + remaining
     while time.time() < deadline:
         if _process_gone(proc, pid):
             _wait_journal()

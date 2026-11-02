@@ -150,7 +150,7 @@ def t1_ensure_injects_new():
         data = json.loads(pref.read_text(encoding="utf-8"))
         check("t1_credentials_true", data.get("credentials_enable_service") is True)
         check("t1_session_dict", isinstance(data.get("session"), dict))
-        check("t1_restore_4", (data.get("session") or {}).get("restore_on_startup") == 4)
+        check("t1_restore_1", (data.get("session") or {}).get("restore_on_startup") == 1)
 
 
 def t1_alias_works():
@@ -162,7 +162,7 @@ def t1_alias_works():
     check("t1_alias_file_exists", pref.exists())
     if pref.exists():
         data = json.loads(pref.read_text(encoding="utf-8"))
-        check("t1_alias_restore_4", (data.get("session") or {}).get("restore_on_startup") == 4)
+        check("t1_alias_restore_1", (data.get("session") or {}).get("restore_on_startup") == 1)
 
 
 def t1_idempotent_restore():
@@ -178,7 +178,7 @@ def t1_idempotent_restore():
     check("t1_idempotent_creds_kept", data["credentials_enable_service"] is False)
 
 
-def t1_idempotent_restore_4():
+def t1_idempotent_restore_4_migration():
     _setup_store()
     pid = 104
     ddir = PROFILES_DIR / str(pid) / "data"
@@ -187,7 +187,7 @@ def t1_idempotent_restore_4():
     pref.write_text(json.dumps({"session": {"restore_on_startup": 4}}), encoding="utf-8")
     launcher.ensure_password_manager(ddir)
     data = json.loads(pref.read_text(encoding="utf-8"))
-    check("t1_idempotent_4_kept", (data.get("session") or {}).get("restore_on_startup") == 4)
+    check("t1_idempotent_4_migrated_to_1", (data.get("session") or {}).get("restore_on_startup") == 1)
 
 
 def t1_idempotent_restore_other_not_overwritten():
@@ -196,10 +196,22 @@ def t1_idempotent_restore_other_not_overwritten():
     ddir = PROFILES_DIR / str(pid) / "data"
     pref = _preferences_path(pid)
     pref.parent.mkdir(parents=True, exist_ok=True)
-    pref.write_text(json.dumps({"session": {"restore_on_startup": 3}}), encoding="utf-8")
+    pref.write_text(json.dumps({"session": {"restore_on_startup": 0}}), encoding="utf-8")
     launcher.ensure_password_manager(ddir)
     data = json.loads(pref.read_text(encoding="utf-8"))
-    check("t1_idempotent_other_kept", (data.get("session") or {}).get("restore_on_startup") == 3)
+    check("t1_idempotent_0_kept", (data.get("session") or {}).get("restore_on_startup") == 0)
+
+
+def t1_idempotent_restore_other_2_not_overwritten():
+    _setup_store()
+    pid = 112
+    ddir = PROFILES_DIR / str(pid) / "data"
+    pref = _preferences_path(pid)
+    pref.parent.mkdir(parents=True, exist_ok=True)
+    pref.write_text(json.dumps({"session": {"restore_on_startup": 2}}), encoding="utf-8")
+    launcher.ensure_password_manager(ddir)
+    data = json.loads(pref.read_text(encoding="utf-8"))
+    check("t1_idempotent_2_kept", (data.get("session") or {}).get("restore_on_startup") == 2)
 
 
 def t1_session_missing_added():
@@ -212,7 +224,7 @@ def t1_session_missing_added():
     launcher.ensure_password_manager(ddir)
     data = json.loads(pref.read_text(encoding="utf-8"))
     check("t1_session_added", isinstance(data.get("session"), dict))
-    check("t1_restore_4", (data.get("session") or {}).get("restore_on_startup") == 4)
+    check("t1_restore_1", (data.get("session") or {}).get("restore_on_startup") == 1)
 
 
 def t1_session_not_dict_replaced():
@@ -225,7 +237,7 @@ def t1_session_not_dict_replaced():
     launcher.ensure_password_manager(ddir)
     data = json.loads(pref.read_text(encoding="utf-8"))
     check("t1_session_fixed", isinstance(data.get("session"), dict))
-    check("t1_restore_4", (data.get("session") or {}).get("restore_on_startup") == 4)
+    check("t1_restore_1", (data.get("session") or {}).get("restore_on_startup") == 1)
 
 
 def t1_credentials_missing_added():
@@ -248,6 +260,22 @@ def t1_no_tmp_leftover():
     launcher.ensure_password_manager(ddir)
     tmp = _preferences_path(pid).with_name("Preferences.tmp")
     check("t1_no_tmp_leftover", not tmp.exists())
+
+
+def t1_idempotent_no_change():
+    _setup_store()
+    pid = 113
+    ddir = PROFILES_DIR / str(pid) / "data"
+    pref = _preferences_path(pid)
+    pref.parent.mkdir(parents=True, exist_ok=True)
+    pref.write_text(json.dumps({"session": {"restore_on_startup": 1}, "credentials_enable_service": True}), encoding="utf-8")
+    st1 = os.stat(pref).st_mtime_ns
+    time.sleep(0.01)
+    launcher.ensure_password_manager(ddir)
+    st2 = os.stat(pref).st_mtime_ns
+    data = json.loads(pref.read_text(encoding="utf-8"))
+    check("t1_idempotent_mtime", st2 == st1)
+    check("t1_idempotent_unchanged", data["session"]["restore_on_startup"] == 1)
 
 
 def t1_malformed_preferences_no_crash():
@@ -480,6 +508,59 @@ def t4_close_profile_passes_data_dir():
     check("t4_close_profile_data_dir_call", "data_dir=item_info.get(\"data_dir\")" in src or "data_dir=info.get(\"data_dir\")" in src)
 
 
+def t4_graceful_close_sends_browser_close():
+    _setup_store()
+    import urllib.request
+    sent = {"cmd": None}
+    
+    class FakeWS:
+        def __init__(self, *args, **kwargs):
+            pass
+        def send(self, msg):
+            sent["cmd"] = msg
+        def recv(self):
+            return ""
+        def settimeout(self, t):
+            pass
+        def close(self):
+            pass
+    
+    fake_version = {"webSocketDebuggerUrl": "ws://127.0.0.1:1/debugger"}
+    body_version = json.dumps(fake_version).encode("utf-8")
+    body_list = json.dumps([]).encode("utf-8")
+    
+    class FakeResponse:
+        def __init__(self, body):
+            self._body = body
+            self.status = 200
+            self.headers = {"content-type": "application/json"}
+        def read(self):
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+    
+    original_urlopen = urllib.request.urlopen
+    def fake_urlopen(url, timeout=0):
+        if url.endswith("/json/version"):
+            return FakeResponse(body_version)
+        if url.endswith("/json/list"):
+            return FakeResponse(body_list)
+        raise Exception("other")
+    
+    import websocket
+    orig_create = websocket.create_connection
+    websocket.create_connection = lambda *a, **k: FakeWS(*a, **k)
+    try:
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            res = launcher._graceful_close("127.0.0.1:1", proc=None, pid=0, timeout=1.0)
+    finally:
+        websocket.create_connection = orig_create
+    check("t4_browser_close_sent", sent["cmd"] == json.dumps({"id": 1, "method": "Browser.close"}))
+    check("t4_browser_close_result", res is True)
+
+
 # --- Fase sync guard tests ---
 def t5_guard_skips_empty_upload():
     _setup_store()
@@ -620,7 +701,7 @@ def t6_verify_cookie_db_false_missing():
 
 def main():
     tests = [
-        t1_ensure_injects_new, t1_alias_works, t1_idempotent_restore, t1_idempotent_restore_4, t1_idempotent_restore_other_not_overwritten,
+        t1_ensure_injects_new, t1_alias_works, t1_idempotent_restore, t1_idempotent_restore_4_migration, t1_idempotent_restore_other_not_overwritten, t1_idempotent_restore_other_2_not_overwritten, t1_idempotent_no_change,
         t1_session_missing_added, t1_session_not_dict_replaced, t1_credentials_missing_added,
         t1_no_tmp_leftover, t1_malformed_preferences_no_crash, t1_default_dir_created,
         t2_gmail_session_cookies, t2_persistent_cookie_session_false, t2_empty_db_returns_empty_list,
@@ -630,7 +711,7 @@ def main():
         t3_update_existing_cookie, t3_preserve_sessions_param_default_true, t3_update_cookies_returns_true,
         t3_update_cookies_signature,
         t4_graceful_close_no_address_process_gone, t4_graceful_close_no_address_process_alive,
-        t4_graceful_close_journal_wait, t4_graceful_close_signature, t4_close_profile_passes_data_dir,
+        t4_graceful_close_journal_wait, t4_graceful_close_signature, t4_close_profile_passes_data_dir, t4_graceful_close_sends_browser_close,
         t5_guard_skips_empty_upload, t5_nonempty_upload_called, t5_sync_guard_returns_cookie_res_none_on_empty,
         t5_ensure_alias_exists, t5_ensure_password_manager_exists,
         t6_extra_counts, t6_empty_update_preserve_default, t6_empty_update_preserve_true_explicit,
