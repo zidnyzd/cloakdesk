@@ -1273,8 +1273,12 @@ def _graceful_close(debugging_address, proc=None, pid=0, timeout=10.0, data_dir=
         ws_url = version_info.get("webSocketDebuggerUrl")
         if ws_url:
             try:
+                # Hilangkan header Origin pada handshake websocket. Chromium
+                # menolak koneksi dengan 403 bila header Origin tidak cocok
+                # dengan --remote-allow-origins, jadi kita tidak menambahkan
+                # flag pelonggaran dan hanya menekan header tersebut.
                 import websocket as _ws_client
-                ws = _ws_client.create_connection(ws_url, timeout=3)
+                ws = _ws_client.create_connection(ws_url, timeout=3, suppress_origin=True)
                 try:
                     ws.send(json.dumps({"id": 1, "method": "Browser.close"}))
                     try:

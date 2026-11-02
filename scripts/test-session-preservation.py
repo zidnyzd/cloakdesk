@@ -512,6 +512,7 @@ def t4_graceful_close_sends_browser_close():
     _setup_store()
     import urllib.request
     sent = {"cmd": None}
+    call_kwargs = {}
     
     class FakeWS:
         def __init__(self, *args, **kwargs):
@@ -551,13 +552,17 @@ def t4_graceful_close_sends_browser_close():
     
     import websocket
     orig_create = websocket.create_connection
-    websocket.create_connection = lambda *a, **k: FakeWS(*a, **k)
+    def fake_create(*args, **kwargs):
+        call_kwargs.update(kwargs)
+        return FakeWS(*args, **kwargs)
+    websocket.create_connection = fake_create
     try:
         with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
             res = launcher._graceful_close("127.0.0.1:1", proc=None, pid=0, timeout=1.0)
     finally:
         websocket.create_connection = orig_create
     check("t4_browser_close_sent", sent["cmd"] == json.dumps({"id": 1, "method": "Browser.close"}))
+    check("t4_suppress_origin_passed", call_kwargs.get("suppress_origin") is True)
     check("t4_browser_close_result", res is True)
 
 
