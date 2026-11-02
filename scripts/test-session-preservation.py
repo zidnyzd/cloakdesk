@@ -704,6 +704,137 @@ def t6_verify_cookie_db_false_missing():
     check("t6_verify_missing", cookies.verify_cookie_db(999999) is False)
 
 
+# --- Fase deduplikasi cookie ---
+def _ensure_dup_db(pid):
+    p = cookies._database_path(pid)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(p))
+    cookies._create_schema(conn)
+    conn.execute("DROP INDEX IF EXISTS cookies_unique_index")
+    conn.commit()
+    conn.close()
+
+
+def _make_dup_row(pid, host, name, path, source_scheme, source_port, secure=0,
+                  session=True, last_update_utc=None, creation_utc=None):
+    _ensure_dup_db(pid)
+    conn = sqlite3.connect(str(cookies._database_path(pid)))
+    cols = cookies._columns(conn)
+    now = int((time.time() + cookies._EPOCH_DELTA) * 1_000_000)
+    if last_update_utc is None:
+        last_update_utc = now
+    if creation_utc is None:
+        creation_utc = now
+    values = {
+        "creation_utc": creation_utc,
+        "host_key": host,
+        "top_frame_site_key": "",
+        "name": name,
+        "value": "",
+        "encrypted_value": b"",
+        "path": path,
+        "expires_utc": 0,
+        "is_secure": secure,
+        "is_httponly": 0,
+        "last_access_utc": now,
+        "has_expires": 0,
+        "is_persistent": 0,
+        "priority": 1,
+        "samesite": -1,
+        "source_scheme": source_scheme,
+        "source_port": source_port,
+        "last_update_utc": last_update_utc,
+        "source_type": 0,
+        "has_cross_site_ancestor": 0,
+        "is_session": 1,
+    }
+    names = [c for c in values if c in cols]
+    ph = ", ".join("?" for _ in names)
+    conn.execute(
+        f"INSERT INTO cookies ({', '.join(names)}) VALUES ({ph})",
+        [values[c] for c in names],
+    )
+    conn.commit()
+    conn.close()
+
+
+def t7_no_duplicate_on_chromium_style_overwrite():
+    _setup_store()
+    pid = 701
+    _make_dup_row(pid, ".example.com", "foo", "/", 2, 443, secure=1)
+    cookies.update_cookies(
+        pid,
+        [{"domain": ".example.com", "name": "foo", "path": "/", "value": "v2",
+          "secure": True, "session": False, "expires": 1893456000}],
+    )
+    items = json.loads(cookies.get_cookies(pid))
+    matches = [it for it in items if it["name"] == "foo"]
+    check("t7_no_duplicate_rows", len(matches) == 1)
+    check("t7_value_updated", matches and matches[0]["value"] == "v2")
+
+
+def t7_non_secure_stored_as_https():
+    _setup_store()
+    pid = 702
+    _make_empty_cookies_db(pid)
+    cookies.update_cookies(
+        pid,
+        [{"domain": ".example.com", "name": "ns", "path": "/", "value": "v",
+          "secure": False, "session": True}],
+    )
+    conn = sqlite3.connect(str(cookies._database_path(pid)))
+    row = conn.execute(
+        "SELECT source_scheme, source_port FROM cookies WHERE name = 'ns'"
+    ).fetchone()
+    conn.close()
+    check("t7_non_secure_scheme_2", row and row[0] == 2)
+    check("t7_non_secure_port_443", row and row[1] == 443)
+
+
+def t7_dedupe_removes_duplicates():
+    _setup_store()
+    pid = 703
+    _make_dup_row(pid, ".example.com", "foo", "/", 2, 443, secure=1,
+                  last_update_utc=100, creation_utc=100)
+    _make_dup_row(pid, ".example.com", "foo", "/", 2, 443, secure=1,
+                  last_update_utc=999, creation_utc=999)
+    _make_dup_row(pid, ".example.com", "foo", "/", 2, 443, secure=1,
+                  last_update_utc=500, creation_utc=500)
+    deleted = cookies.dedupe_cookies(pid)
+    items = json.loads(cookies.get_cookies(pid))
+    matches = [it for it in items if it["name"] == "foo"]
+    check("t7_dedupe_deleted_two", deleted == 2)
+    check("t7_dedupe_keeps_one", len(matches) == 1)
+
+
+def t7_deduke_session_preserved():
+    _setup_store()
+    pid = 704
+    _make_dup_row(pid, ".example.com", "sess", "/", 2, 443, secure=1,
+                  session=True, last_update_utc=100, creation_utc=100)
+    _make_dup_row(pid, ".example.com", "sess", "/", 2, 443, secure=1,
+                  session=True, last_update_utc=999, creation_utc=999)
+    cookies.dedupe_cookies(pid)
+    items = json.loads(cookies.get_cookies(pid))
+    matches = [it for it in items if it["name"] == "sess"]
+    check("t7_dedupe_session_kept", len(matches) == 1 and matches[0]["session"] is True)
+
+
+def t7_dedupe_refuses_when_open():
+    _setup_store()
+    pid = 705
+    _make_dup_row(pid, ".example.com", "foo", "/", 2, 443, secure=1)
+    _make_dup_row(pid, ".example.com", "foo", "/", 2, 443, secure=1,
+                  last_update_utc=999, creation_utc=999)
+    with mock.patch("antidetect.cookies.launcher.is_open", return_value=True):
+        try:
+            cookies.dedupe_cookies(pid)
+            ok = False
+        except cookies.CookieError:
+            ok = True
+    check("t7_dedupe_refuses_open", ok)
+
+
 def main():
     tests = [
         t1_ensure_injects_new, t1_alias_works, t1_idempotent_restore, t1_idempotent_restore_4_migration, t1_idempotent_restore_other_not_overwritten, t1_idempotent_restore_other_2_not_overwritten, t1_idempotent_no_change,
@@ -722,6 +853,8 @@ def main():
         t6_extra_counts, t6_empty_update_preserve_default, t6_empty_update_preserve_true_explicit,
         t6_empty_update_wipe_false, t6_partial_update_adds, t6_cookie_digest_stable,
         t6_verify_cookie_db_false_missing,
+        t7_no_duplicate_on_chromium_style_overwrite, t7_non_secure_stored_as_https,
+        t7_dedupe_removes_duplicates, t7_deduke_session_preserved, t7_dedupe_refuses_when_open,
     ]
     for t in tests:
         try:

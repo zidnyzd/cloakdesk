@@ -228,12 +228,17 @@ def _create_schema(conn):
         "name", "path", "source_scheme", "source_port",
     )
     if all(column in columns for column in index_columns):
-        conn.execute(
-            """CREATE UNIQUE INDEX IF NOT EXISTS cookies_unique_index ON cookies(
-                   host_key, top_frame_site_key, has_cross_site_ancestor, name,
-                   path, source_scheme, source_port
-               )"""
-        )
+        try:
+            conn.execute(
+                """CREATE UNIQUE INDEX IF NOT EXISTS cookies_unique_index ON cookies(
+                       host_key, top_frame_site_key, has_cross_site_ancestor, name,
+                       path, source_scheme, source_port
+                   )"""
+            )
+        except sqlite3.IntegrityError:
+            # Basis data lama bisa sudah punya baris kembar. Index ditunda,
+            # dedupe_cookies yang membersihkannya lalu membuat ulang index.
+            pass
     if not conn.execute("SELECT 1 FROM meta WHERE key = 'version'").fetchone():
         conn.execute("INSERT INTO meta(key, value) VALUES('version', '24')")
         conn.execute("INSERT INTO meta(key, value) VALUES('last_compatible_version', '24')")
@@ -365,13 +370,35 @@ def _insert_cookie(conn, columns, cookie):
     session = bool(cookie.get("session")) or expires <= 0
     expires_utc = 0 if session else (expires + _EPOCH_DELTA) * 1_000_000
     secure = 1 if cookie.get("secure") else 0
-    source_scheme = 2 if secure else 1
-    source_port = 443 if secure else 80
+
+    scheme_raw = cookie.get("source_scheme")
+    port_raw = cookie.get("source_port")
+    scheme_provided = scheme_raw is not None
+    port_provided = port_raw is not None
+    source_scheme = _int_value(scheme_raw, 2) if scheme_provided else None
+    source_port = _int_value(port_raw, 443) if port_provided else None
+    if source_scheme not in (1, 2):
+        source_scheme = None
+    if source_port not in (80, 443):
+        source_port = None
+    if source_scheme is None and source_port is None:
+        source_scheme, source_port = 2, 443
+    elif source_scheme is None:
+        source_scheme = 1 if source_port == 80 else 2
+    elif source_port is None:
+        source_port = 80 if source_scheme == 1 else 443
+
+    top_frame_site_key = cookie.get("top_frame_site_key")
+    if top_frame_site_key is None:
+        top_frame_site_key = ""
+    else:
+        top_frame_site_key = str(top_frame_site_key)
+    has_cross_site_ancestor = _int_value(cookie.get("has_cross_site_ancestor"), 0)
 
     values = {
         "creation_utc": now,
         "host_key": domain,
-        "top_frame_site_key": "",
+        "top_frame_site_key": top_frame_site_key,
         "name": name,
         "value": "",
         "encrypted_value": b"v10" + _cbc_encrypt(
@@ -390,20 +417,94 @@ def _insert_cookie(conn, columns, cookie):
         "source_port": source_port,
         "last_update_utc": now,
         "source_type": 0,
-        "has_cross_site_ancestor": 0,
+        "has_cross_site_ancestor": has_cross_site_ancestor,
         "is_session": 1 if session else 0,
     }
 
-    conn.execute(
-        "DELETE FROM cookies WHERE host_key = ? AND path = ? AND name = ?",
-        (domain, path, name),
+    key_columns = (
+        "host_key", "top_frame_site_key", "has_cross_site_ancestor",
+        "name", "path", "source_scheme", "source_port",
     )
+    key_values = {
+        "host_key": domain,
+        "top_frame_site_key": top_frame_site_key,
+        "has_cross_site_ancestor": has_cross_site_ancestor,
+        "name": name,
+        "path": path,
+        "source_scheme": source_scheme,
+        "source_port": source_port,
+    }
+    if all(column in columns for column in key_columns):
+        where = " AND ".join(f"{column} = ?" for column in key_columns)
+        params = [key_values[column] for column in key_columns]
+    else:
+        where = "host_key = ? AND path = ? AND name = ?"
+        params = [domain, path, name]
+    conn.execute(f"DELETE FROM cookies WHERE {where}", params)
+
     names = [column for column in values if column in columns]
     placeholders = ", ".join("?" for _ in names)
     conn.execute(
         f"INSERT INTO cookies ({', '.join(names)}) VALUES ({placeholders})",
         [values[column] for column in names],
     )
+
+
+def dedupe_cookies(profile_id):
+    profile_id = int(profile_id)
+    _require_closed(profile_id)
+    path = _database_path(profile_id)
+    if not path.exists():
+        return 0
+    backup = path.with_name(path.name + ".bak")
+    if path.exists():
+        try:
+            shutil.copy2(path, backup)
+        except OSError as error:
+            raise CookieError(f"gagal membuat cadangan cookie: {error}")
+    deleted = 0
+    try:
+        conn = _connect(path)
+        try:
+            columns = _columns(conn)
+            key_columns = (
+                "host_key", "top_frame_site_key", "has_cross_site_ancestor",
+                "name", "path", "source_scheme", "source_port",
+            )
+            if not all(column in columns for column in key_columns):
+                conn.close()
+                return 0
+            rows = conn.execute(
+                f"SELECT rowid, {', '.join(key_columns)}, last_update_utc, creation_utc "
+                f"FROM cookies"
+            ).fetchall()
+            groups = {}
+            for row in rows:
+                key = tuple(row[1:8])
+                groups.setdefault(key, []).append(row)
+            for members in groups.values():
+                if len(members) <= 1:
+                    continue
+                members.sort(key=lambda row: (row[8], row[9]))
+                for member in members[:-1]:
+                    conn.execute("DELETE FROM cookies WHERE rowid = ?", (member[0],))
+                    deleted += 1
+            conn.commit()
+            try:
+                conn.execute(
+                    """CREATE UNIQUE INDEX IF NOT EXISTS cookies_unique_index ON cookies(
+                           host_key, top_frame_site_key, has_cross_site_ancestor, name,
+                           path, source_scheme, source_port
+                       )"""
+                )
+                conn.commit()
+            except sqlite3.IntegrityError:
+                conn.rollback()
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError as error:
+        raise CookieError(f"gagal mendedup cookie: {error}")
+    return deleted
 
 
 def update_cookies(profile_id, cookie, preserve_sessions=True):
@@ -432,7 +533,6 @@ def update_cookies(profile_id, cookie, preserve_sessions=True):
                     conn.execute("DELETE FROM cookies")
                 else:
                     conn.rollback()
-                    return True
             else:
                 for item in items:
                     _insert_cookie(conn, columns, item)
@@ -441,6 +541,7 @@ def update_cookies(profile_id, cookie, preserve_sessions=True):
             conn.close()
     except sqlite3.DatabaseError as error:
         raise CookieError(f"gagal menulis cookie: {error}")
+    dedupe_cookies(profile_id)
     return True
 
 
