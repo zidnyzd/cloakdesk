@@ -835,6 +835,144 @@ def t7_dedupe_refuses_when_open():
     check("t7_dedupe_refuses_open", ok)
 
 
+# --- Fase duplikat tingkat jar ---
+def _make_dup_row_full(pid, host, name, path, source_scheme, source_port, has_cross_site_ancestor=0,
+                       secure=0, session=True, last_update_utc=None, creation_utc=None, top_frame_site_key=""):
+    _ensure_dup_db(pid)
+    conn = sqlite3.connect(str(cookies._database_path(pid)))
+    cols = cookies._columns(conn)
+    now = int((time.time() + cookies._EPOCH_DELTA) * 1_000_000)
+    if last_update_utc is None:
+        last_update_utc = now
+    if creation_utc is None:
+        creation_utc = now
+    values = {
+        "creation_utc": creation_utc,
+        "host_key": host,
+        "top_frame_site_key": top_frame_site_key,
+        "name": name,
+        "value": "",
+        "encrypted_value": b"",
+        "path": path,
+        "expires_utc": 0,
+        "is_secure": secure,
+        "is_httponly": 0,
+        "last_access_utc": now,
+        "has_expires": 0,
+        "is_persistent": 0,
+        "priority": 1,
+        "samesite": -1,
+        "source_scheme": source_scheme,
+        "source_port": source_port,
+        "last_update_utc": last_update_utc,
+        "source_type": 0,
+        "has_cross_site_ancestor": has_cross_site_ancestor,
+        "is_session": 1 if session else 0,
+    }
+    names = [c for c in values if c in cols]
+    ph = ", ".join("?" for _ in names)
+    conn.execute(
+        f"INSERT INTO cookies ({', '.join(names)}) VALUES ({ph})",
+        [values[c] for c in names],
+    )
+    conn.commit()
+    conn.close()
+
+
+def t8_insert_removes_scheme_port_cross_variants():
+    _setup_store()
+    pid = 801
+    _make_dup_row_full(pid, ".google.co.id", "APISID", "/", 1, 80, has_cross_site_ancestor=0,
+                       last_update_utc=100, creation_utc=100)
+    _make_dup_row_full(pid, ".google.co.id", "APISID", "/", 2, 443, has_cross_site_ancestor=1,
+                       last_update_utc=999, creation_utc=999)
+    cookies.update_cookies(
+        pid,
+        [{"domain": ".google.co.id", "name": "APISID", "path": "/", "value": "v2",
+          "secure": True, "session": False, "expires": 1893456000,
+          "source_scheme": 1, "source_port": 80, "has_cross_site_ancestor": 0}],
+    )
+    conn = sqlite3.connect(str(cookies._database_path(pid)))
+    rows = conn.execute(
+        "SELECT source_scheme, source_port, has_cross_site_ancestor FROM cookies WHERE name='APISID'"
+    ).fetchall()
+    conn.close()
+    check("t8_insert_one_row", len(rows) == 1)
+    if rows:
+        check("t8_insert_canonical_from_newest", rows[0] == (2, 443, 1))
+
+
+def t8_insert_canonical_from_latest_existing():
+    _setup_store()
+    pid = 802
+    _make_dup_row_full(pid, ".google.com", "SID", "/", 2, 443, has_cross_site_ancestor=1,
+                       last_update_utc=999, creation_utc=999)
+    _make_dup_row_full(pid, ".google.com", "SID", "/", 1, 80, has_cross_site_ancestor=0,
+                       last_update_utc=100, creation_utc=100)
+    cookies.update_cookies(
+        pid,
+        [{"domain": ".google.com", "name": "SID", "path": "/", "value": "v3",
+          "secure": True, "session": False, "expires": 1893456000}],
+    )
+    conn = sqlite3.connect(str(cookies._database_path(pid)))
+    rows = conn.execute(
+        "SELECT source_scheme, source_port, has_cross_site_ancestor FROM cookies WHERE name='SID'"
+    ).fetchall()
+    conn.close()
+    check("t8_insert_canonical_latest_one_row", len(rows) == 1)
+    if rows:
+        check("t8_insert_canonical_from_existing_newest", rows[0] == (2, 443, 1))
+
+
+def t8_dedupe_merges_cross_variant():
+    _setup_store()
+    pid = 803
+    _make_dup_row_full(pid, ".google.com", "__Secure-1PSIDCC", "/", 2, 443, has_cross_site_ancestor=1,
+                       last_update_utc=100, creation_utc=100)
+    _make_dup_row_full(pid, ".google.com", "__Secure-1PSIDCC", "/", 2, 443, has_cross_site_ancestor=0,
+                       last_update_utc=999, creation_utc=999)
+    deleted = cookies.dedupe_cookies(pid)
+    conn = sqlite3.connect(str(cookies._database_path(pid)))
+    rows = conn.execute(
+        "SELECT source_scheme, source_port, has_cross_site_ancestor, last_update_utc FROM cookies WHERE name='__Secure-1PSIDCC'"
+    ).fetchall()
+    conn.close()
+    check("t8_dedupe_cross_deleted", deleted >= 1)
+    check("t8_dedupe_cross_one_row", len(rows) == 1)
+    if rows:
+        check("t8_dedupe_cross_keeps_newest", rows[0][3] == 999)
+
+
+def t8_dedupe_merges_scheme_port_variant():
+    _setup_store()
+    pid = 804
+    _make_dup_row_full(pid, ".example.com", "foo", "/", 1, 80, has_cross_site_ancestor=0,
+                       last_update_utc=100, creation_utc=100)
+    _make_dup_row_full(pid, ".example.com", "foo", "/", 2, 443, has_cross_site_ancestor=0,
+                       last_update_utc=500, creation_utc=500)
+    deleted = cookies.dedupe_cookies(pid)
+    items = json.loads(cookies.get_cookies(pid))
+    matches = [it for it in items if it["name"] == "foo"]
+    check("t8_dedupe_scheme_deleted", deleted >= 1)
+    check("t8_dedupe_scheme_one_row", len(matches) == 1)
+
+
+def t8_gmail_at_preserved_after_dedupe():
+    _setup_store()
+    pid = 805
+    _make_gmail_cookies_db(pid)
+    _make_dup_row_full(pid, ".google.com", "GMAIL_AT", "/mail/u/0", 1, 80, has_cross_site_ancestor=0,
+                       last_update_utc=100, creation_utc=100, session=True)
+    _make_dup_row_full(pid, ".google.com", "GMAIL_AT", "/mail/u/0", 2, 443, has_cross_site_ancestor=1,
+                       last_update_utc=999, creation_utc=999, session=True)
+    cookies.dedupe_cookies(pid)
+    items = json.loads(cookies.get_cookies(pid))
+    gmail = [it for it in items if it.get("name") == "GMAIL_AT"]
+    check("t8_gmail_at_count_10", len(gmail) == 10)
+    paths = sorted(it.get("path") for it in gmail)
+    check("t8_gmail_paths_0_to_9", paths == [f"/mail/u/{i}" for i in range(10)])
+
+
 def main():
     tests = [
         t1_ensure_injects_new, t1_alias_works, t1_idempotent_restore, t1_idempotent_restore_4_migration, t1_idempotent_restore_other_not_overwritten, t1_idempotent_restore_other_2_not_overwritten, t1_idempotent_no_change,
@@ -855,6 +993,8 @@ def main():
         t6_verify_cookie_db_false_missing,
         t7_no_duplicate_on_chromium_style_overwrite, t7_non_secure_stored_as_https,
         t7_dedupe_removes_duplicates, t7_deduke_session_preserved, t7_dedupe_refuses_when_open,
+        t8_insert_removes_scheme_port_cross_variants, t8_insert_canonical_from_latest_existing,
+        t8_dedupe_merges_cross_variant, t8_dedupe_merges_scheme_port_variant, t8_gmail_at_preserved_after_dedupe,
     ]
     for t in tests:
         try:

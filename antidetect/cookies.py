@@ -371,29 +371,71 @@ def _insert_cookie(conn, columns, cookie):
     expires_utc = 0 if session else (expires + _EPOCH_DELTA) * 1_000_000
     secure = 1 if cookie.get("secure") else 0
 
-    scheme_raw = cookie.get("source_scheme")
-    port_raw = cookie.get("source_port")
-    scheme_provided = scheme_raw is not None
-    port_provided = port_raw is not None
-    source_scheme = _int_value(scheme_raw, 2) if scheme_provided else None
-    source_port = _int_value(port_raw, 443) if port_provided else None
-    if source_scheme not in (1, 2):
-        source_scheme = None
-    if source_port not in (80, 443):
-        source_port = None
-    if source_scheme is None and source_port is None:
-        source_scheme, source_port = 2, 443
-    elif source_scheme is None:
-        source_scheme = 1 if source_port == 80 else 2
-    elif source_port is None:
-        source_port = 80 if source_scheme == 1 else 443
-
     top_frame_site_key = cookie.get("top_frame_site_key")
     if top_frame_site_key is None:
         top_frame_site_key = ""
     else:
         top_frame_site_key = str(top_frame_site_key)
-    has_cross_site_ancestor = _int_value(cookie.get("has_cross_site_ancestor"), 0)
+
+    scheme_raw = cookie.get("source_scheme")
+    port_raw = cookie.get("source_port")
+    scheme_provided = scheme_raw is not None
+    port_provided = port_raw is not None
+    source_scheme_payload = _int_value(scheme_raw, 2) if scheme_provided else None
+    source_port_payload = _int_value(port_raw, 443) if port_provided else None
+    if source_scheme_payload not in (1, 2):
+        source_scheme_payload = None
+    if source_port_payload not in (80, 443):
+        source_port_payload = None
+    if source_scheme_payload is None and source_port_payload is None:
+        source_scheme_payload, source_port_payload = 2, 443
+    elif source_scheme_payload is None:
+        source_scheme_payload = 1 if source_port_payload == 80 else 2
+    elif source_port_payload is None:
+        source_port_payload = 80 if source_scheme_payload == 1 else 443
+
+    has_cross_site_ancestor_payload = _int_value(cookie.get("has_cross_site_ancestor"), 0)
+
+    source_scheme = source_scheme_payload
+    source_port = source_port_payload
+    has_cross_site_ancestor = has_cross_site_ancestor_payload
+
+    identity_columns = ("host_key", "name", "path", "top_frame_site_key")
+    if all(column in columns for column in identity_columns):
+        where_id = " AND ".join(f"{column} = ?" for column in identity_columns)
+        params_id = [domain, name, path, top_frame_site_key]
+        select_cols = [c for c in ("has_cross_site_ancestor", "source_scheme", "source_port", "last_update_utc", "creation_utc") if c in columns]
+        existing = conn.execute(
+            f"SELECT {', '.join(select_cols)} FROM cookies WHERE {where_id} ORDER BY last_update_utc DESC, creation_utc DESC",
+            params_id,
+        ).fetchall()
+        if existing:
+            # Ambil nilai kanonik dari baris TERBARU
+            newest = existing[0]
+            for index, column in enumerate(("has_cross_site_ancestor", "source_scheme", "source_port")):
+                if column not in select_cols:
+                    continue
+                raw = newest[index]
+                if raw is None:
+                    continue
+                val = _int_value(raw)
+                if column == "has_cross_site_ancestor":
+                    has_cross_site_ancestor = val
+                elif column == "source_scheme" and val in (1, 2):
+                    source_scheme = val
+                elif column == "source_port" and val in (80, 443):
+                    source_port = val
+            # Hapus SEMUA baris dengan empat kolom kunci itu
+            conn.execute(f"DELETE FROM cookies WHERE {where_id}", params_id)
+        else:
+            # Belum ada, pakai nilai dari payload atau default
+            # has_cross_site_ancestor = 0, source_scheme = 2, source_port = 443
+            # (source_scheme/source_port_payload sudah difallback ke default di atas)
+            pass
+    else:
+        where = "host_key = ? AND path = ? AND name = ?"
+        params = [domain, path, name]
+        conn.execute(f"DELETE FROM cookies WHERE {where}", params)
 
     values = {
         "creation_utc": now,
@@ -421,27 +463,6 @@ def _insert_cookie(conn, columns, cookie):
         "is_session": 1 if session else 0,
     }
 
-    key_columns = (
-        "host_key", "top_frame_site_key", "has_cross_site_ancestor",
-        "name", "path", "source_scheme", "source_port",
-    )
-    key_values = {
-        "host_key": domain,
-        "top_frame_site_key": top_frame_site_key,
-        "has_cross_site_ancestor": has_cross_site_ancestor,
-        "name": name,
-        "path": path,
-        "source_scheme": source_scheme,
-        "source_port": source_port,
-    }
-    if all(column in columns for column in key_columns):
-        where = " AND ".join(f"{column} = ?" for column in key_columns)
-        params = [key_values[column] for column in key_columns]
-    else:
-        where = "host_key = ? AND path = ? AND name = ?"
-        params = [domain, path, name]
-    conn.execute(f"DELETE FROM cookies WHERE {where}", params)
-
     names = [column for column in values if column in columns]
     placeholders = ", ".join("?" for _ in names)
     conn.execute(
@@ -467,20 +488,18 @@ def dedupe_cookies(profile_id):
         conn = _connect(path)
         try:
             columns = _columns(conn)
-            key_columns = (
-                "host_key", "top_frame_site_key", "has_cross_site_ancestor",
-                "name", "path", "source_scheme", "source_port",
-            )
-            if not all(column in columns for column in key_columns):
+            identity_columns = ("host_key", "name", "path", "top_frame_site_key")
+            if not all(column in columns for column in identity_columns):
                 conn.close()
                 return 0
             rows = conn.execute(
-                f"SELECT rowid, {', '.join(key_columns)}, last_update_utc, creation_utc "
-                f"FROM cookies"
+                "SELECT rowid, host_key, name, path, top_frame_site_key, "
+                "has_cross_site_ancestor, source_scheme, source_port, "
+                "last_update_utc, creation_utc FROM cookies"
             ).fetchall()
             groups = {}
             for row in rows:
-                key = tuple(row[1:8])
+                key = (row[1], row[2], row[3], row[4])
                 groups.setdefault(key, []).append(row)
             for members in groups.values():
                 if len(members) <= 1:
