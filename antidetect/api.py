@@ -235,7 +235,11 @@ def _align_kernel_metadata(data, stored=None):
     preferences = dict(preferences)
     binary = launcher.kernel_for({"preference_config": preferences})
     if incoming_preferences:
-        data["preference_config"] = launcher.kernel_reference(preferences, binary)
+        # kernel_reference hanya menghasilkan tiga kunci kernel, jadi gabungkan ke
+        # preferensi yang masuk supaya extension_ids dan pengaturan lain tidak hilang.
+        merged = dict(preferences)
+        merged.update(launcher.kernel_reference(preferences, binary))
+        data["preference_config"] = merged
 
     major = launcher.kernel_major_version(binary)
     if major <= 0:

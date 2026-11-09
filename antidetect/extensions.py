@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import secrets
 import shutil
 import struct
@@ -40,6 +41,41 @@ def _extensions_dir(conn=None):
     if env_home:
         return Path(env_home) / "extensions"
     return EXTENSIONS_DIR
+
+
+_MSG_PATTERN = re.compile(r"^__MSG_(.+?)__$")
+
+
+def _resolve_manifest_name(archive, member, manifest):
+    """Selesaikan placeholder __MSG_key__ di manifest.name pakai _locales/<default_locale>/messages.json."""
+    raw_name = str(manifest.get("name") or "").strip()
+    if not raw_name:
+        return raw_name
+    match = _MSG_PATTERN.match(raw_name)
+    if not match:
+        return raw_name
+    default_locale = str(manifest.get("default_locale") or "").strip()
+    if not default_locale or "/" in default_locale or "\\" in default_locale or ".." in default_locale:
+        return raw_name
+    prefix = member[: -len("manifest.json")]
+    locales_member = f"{prefix}_locales/{default_locale}/messages.json"
+    try:
+        raw = archive.read(locales_member)
+    except KeyError:
+        return raw_name
+    except Exception:
+        return raw_name
+    try:
+        messages = json.loads(raw.decode("utf-8-sig"))
+    except (UnicodeDecodeError, ValueError):
+        return raw_name
+    if not isinstance(messages, dict):
+        return raw_name
+    entry = messages.get(match.group(1))
+    if not isinstance(entry, dict):
+        return raw_name
+    resolved = str(entry.get("message") or "").strip()
+    return resolved or raw_name
 
 
 def _slugify(name):
@@ -130,9 +166,12 @@ def _read_manifest(archive, member):
         raise ExtensionError("manifest.json bukan JSON valid")
     if not isinstance(manifest, dict):
         raise ExtensionError("manifest.json harus berisi objek JSON")
-    title = str(manifest.get("name") or "").strip()
-    if not title:
+    raw_title = str(manifest.get("name") or "").strip()
+    if not raw_title:
         raise ExtensionError("manifest.json tidak memuat name")
+    title = _resolve_manifest_name(archive, member, manifest)
+    if not title:
+        title = raw_title
     return title, str(manifest.get("version") or "").strip()
 
 
