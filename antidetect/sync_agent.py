@@ -301,6 +301,25 @@ def _prepare_outbox_payload(conn, entity_type, raw_payload, kek, dedupe_key):
     return payload
 
 
+def _same_after_mechanical_merge(a, b, ignore_keys):
+    """Membandingkan dua payload tanpa kunci yang memang diisi server.
+
+    Gabungan mekanis muncul karena server menambahkan catatan blob
+    (archive_blob_id, archive_sha256) dan perbaruan waktu (updated_at) yang
+    klien memang tidak mengirim atau tidak menyetujui. Kalau seluruh kunci
+    lain identik, gabungan itu mekanis, bukan pertentangan isi, sehingga tidak
+    perlu dicatat sebagai konflik.
+    """
+    if not isinstance(a, dict) or not isinstance(b, dict):
+        return False
+    for key in set(a) | set(b):
+        if key in ignore_keys:
+            continue
+        if a.get(key) != b.get(key):
+            return False
+    return True
+
+
 def _update_local_revision(conn, entity_type, entity_uuid, new_revision):
     table = ENTITY_TABLES.get(entity_type)
     if not table:
@@ -405,13 +424,23 @@ def push_outbox(conn, server_url=None, token=None, batch_size=50):
                     "DELETE FROM sync_outbox WHERE idempotency_key = ?", (idem_key,)
                 )
                 _update_local_revision(conn, entity_type, entity_uuid, new_rev)
-                if status == "applied":
-                    total_applied += 1
-                else:
-                    total_applied += 1
+                total_applied += 1
+                if status != "applied":
                     conflict_id = res.get("conflict_id")
                     merged_payload = res.get("merged_payload")
-                    if conflict_id:
+                    # Gabungan mekanis: server hanya menambahkan catatan blob
+                    # dan perbaruan waktu yang memang tidak dikirim klien.
+                    # Kalau sisanya identik, jangan catat sebagai konflik.
+                    is_mechanical_merge = (
+                        status == "merged"
+                        and merged_payload is not None
+                        and _same_after_mechanical_merge(
+                            store._loads(outbox_row["payload"]),
+                            merged_payload,
+                            {"archive_blob_id", "archive_sha256", "updated_at"},
+                        )
+                    )
+                    if conflict_id and not is_mechanical_merge:
                         conn.execute(
                             """INSERT OR REPLACE INTO local_conflicts
                                (conflict_id, entity_type, entity_uuid, reason,
