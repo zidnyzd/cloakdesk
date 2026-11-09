@@ -9,6 +9,7 @@ import sqlite3
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 import urllib.error
 import urllib.request
 import uuid
@@ -301,21 +302,62 @@ def _prepare_outbox_payload(conn, entity_type, raw_payload, kek, dedupe_key):
     return payload
 
 
+def _parse_timestamp_like(value):
+    """Parsing stempel waktu ke detik epoch, atau None jika tidak bisa diparsing."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        local_tz = datetime.now().astimezone().tzinfo
+        try:
+            dt = dt.replace(tzinfo=local_tz)
+        except Exception:
+            return None
+    try:
+        return dt.timestamp()
+    except Exception:
+        return None
+
+
+def _is_timestamp_key(key):
+    return key in ("created_at", "updated_at", "deleted_at") or key.endswith("_at")
+
+
+def _values_equal_for_merge(key, left, right):
+    if left == right:
+        return True
+    if _is_timestamp_key(key):
+        left_ts = _parse_timestamp_like(left)
+        right_ts = _parse_timestamp_like(right)
+        if left_ts is not None and right_ts is not None:
+            return abs(left_ts - right_ts) <= 5
+    return False
+
+
 def _same_after_mechanical_merge(a, b, ignore_keys):
     """Membandingkan dua payload tanpa kunci yang memang diisi server.
 
     Gabungan mekanis muncul karena server menambahkan catatan blob
     (archive_blob_id, archive_sha256) dan perbaruan waktu (updated_at) yang
-    klien memang tidak mengirim atau tidak menyetujui. Kalau seluruh kunci
-    lain identik, gabungan itu mekanis, bukan pertentangan isi, sehingga tidak
-    perlu dicatat sebagai konflik.
+    klien memang tidak mengirim atau tidak menyetujui. Stempel waktu (_at)
+    dibandingkan secara makna dengan toleransi 5 detik karena server menstempel
+    ulang; format lokal naif diartikan sebagai zona waktu sistem. Kalau seluruh
+    kunci lain identik, gabungan itu mekanis, bukan pertentangan isi.
     """
     if not isinstance(a, dict) or not isinstance(b, dict):
         return False
     for key in set(a) | set(b):
         if key in ignore_keys:
             continue
-        if a.get(key) != b.get(key):
+        if not _values_equal_for_merge(key, a.get(key), b.get(key)):
             return False
     return True
 
@@ -437,7 +479,7 @@ def push_outbox(conn, server_url=None, token=None, batch_size=50):
                         and _same_after_mechanical_merge(
                             store._loads(outbox_row["payload"]),
                             merged_payload,
-                            {"archive_blob_id", "archive_sha256", "updated_at"},
+                            {"archive_blob_id", "archive_sha256"},
                         )
                     )
                     if conflict_id and not is_mechanical_merge:
