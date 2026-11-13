@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 REPO = Path(__file__).resolve().parent.parent
-SCRATCH = Path(os.environ.get("ANTIDETECT_SESSION_TEST_DIR") or Path.home() / ".hermes" / "cache" / "scratch" / "antidetect-session")
+SCRATCH = Path(os.environ.get("ANTIDETECT_SESSION_TEST_DIR") or Path.home() / ".cache" / "antidetect" / "test-scratch" / "antidetect-session")
 SCRATCH.mkdir(parents=True, exist_ok=True)
 ROOT = Path(tempfile.mkdtemp(prefix="run-", dir=SCRATCH))
 WORK = ROOT / "work"

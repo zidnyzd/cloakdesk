@@ -295,7 +295,7 @@ DISPLAY=:0 ./venv/bin/python scripts/isolation_test.py
 ## Struktur Berkas Proyek
 
 ```text
-/home/zdna/Projects/antidetect/
+/path/ke/kerja/antidetect/
 ├── assets/                          # Asset visual (logo CloakDesk SVG dan PNG)
 ├── antidetect/                      # Paket utama Python
 │   ├── __main__.py                  # Titik masuk perintah CLI

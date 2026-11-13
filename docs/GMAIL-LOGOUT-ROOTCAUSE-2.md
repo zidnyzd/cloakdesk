@@ -1,6 +1,6 @@
 # Analisis Sebab Akar: Logout Gmail Multi-Akun Setelah Buka-Tutup Profil
 
-Repo: /home/zdna/Projects/cloakdesk
+Repo: cloakdesk
 Branch: main, commit terakhir ac95ad2
 Perbaikan sebelumnya: commit 87ce841 (preservasi sesi)
 Tanggal analisis: 2026-11-03

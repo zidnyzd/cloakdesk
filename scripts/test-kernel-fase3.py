@@ -4,7 +4,7 @@
 Mencakup penyelarasan dinamis User-Agent dan brand version, metadata kernel
 portabel saat profil dibuat atau diperbarui, serta resolusi kernel lintas
 perangkat. Seluruh state ditulis ke direktori sementara di
-~/.hermes/cache/scratch/kernel-fase3 lalu dihapus setelah tes selesai.
+~/.cache/antidetect/test-scratch/kernel-fase3 lalu dihapus setelah tes selesai.
 """
 import json
 import os
@@ -21,7 +21,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 SCRATCH = Path(
     os.environ.get("ANTIDETECT_KERNEL_TEST_DIR")
-    or Path.home() / ".hermes" / "cache" / "scratch" / "kernel-fase3"
+    or Path.home() / ".cache" / "antidetect" / "test-scratch" / "kernel-fase3"
 )
 SCRATCH.mkdir(parents=True, exist_ok=True)
 ROOT = Path(tempfile.mkdtemp(prefix="run-", dir=SCRATCH))

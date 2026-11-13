@@ -13,7 +13,8 @@ import time
 from unittest import mock
 import zipfile
 
-SCRATCH_ROOT = Path("/home/zdna/.hermes/cache/scratch/antigravity")
+os.environ["ANTIDETECT_NO_COOLDOWN"] = "1"
+SCRATCH_ROOT = Path(os.environ.get("ANTIDETECT_TEST_SCRATCH") or Path.home() / ".cache" / "antidetect" / "test-scratch")
 SCRATCH_ROOT.mkdir(parents=True, exist_ok=True)
 WORK_DIR = Path(tempfile.mkdtemp(prefix="sync-test-", dir=str(SCRATCH_ROOT)))
 os.environ["ANTIDETECT_HOME"] = str(WORK_DIR / "default_home")
@@ -1505,7 +1506,7 @@ def test_bookmark_sync(home_a, home_b, profile_uuid, pid_a, pid_b):
         launcher.PROFILES_DIR = home_a / "profiles"
         bookmarks.add_bookmark(
             pid_a,
-            "ZidStore Dashboard",
+            "Contoh Dashboard",
             "https://zidstore.net/dashboard",
             folder="Bookmarks bar",
         )
@@ -1600,18 +1601,18 @@ def test_password_sync(home_a, home_b, server_dir, profile_uuid, pid_a, pid_b):
     sample_passwords = [
         {
             "origin_url": "https://seller.tokopedia.com/",
-            "username": "seller_cabang_01@zidstore.net",
-            "password": "SandiTokopedia#2026!",
+            "username": "seller_cabang_01@contoh.test",
+            "password": "ContohTokopedia#2026!",
         },
         {
             "origin_url": "https://seller.shopee.co.id/",
-            "username": "shopee_utama@zidstore.net",
-            "password": "SandiShopee#9988!",
+            "username": "shopee_utama@contoh.test",
+            "password": "ContohShopee#9988!",
         },
         {
-            "origin_url": "https://zidstore.net/login",
+            "origin_url": "https://contoh.test/login",
             "username": "admin_panel",
-            "password": "SandiInternalZidStore#777!",
+            "password": "ContohInternal#777!",
         },
     ]
 
@@ -1649,10 +1650,10 @@ def test_password_sync(home_a, home_b, server_dir, profile_uuid, pid_a, pid_b):
         blob_store = sync_server.LocalFilesystemBlobStore(server_dir)
         raw_blob = blob_store.blob_path(pw_blob_id).read_bytes()
         for secret_bytes in (
-            b"SandiTokopedia#2026!",
-            b"SandiShopee#9988!",
-            b"SandiInternalZidStore#777!",
-            b"seller_cabang_01@zidstore.net",
+            b"ContohTokopedia#2026!",
+            b"ContohShopee#9988!",
+            b"ContohInternal#777!",
+            b"seller_cabang_01@contoh.test",
         ):
             assert secret_bytes not in raw_blob
             assert secret_bytes not in base64.b64decode(raw_blob)
@@ -1706,13 +1707,13 @@ def test_extension_sync(home_a, home_b, server_dir):
             json.dumps(
                 {
                     "manifest_version": 3,
-                    "name": "ZidStore Sync Helper",
+                    "name": "Contoh Sync Helper",
                     "version": "1.2.0",
                     "description": "Ekstensi uji sinkronisasi Fase 5",
                 }
             ),
         )
-        zf.writestr("background.js", "console.log('zidstore extension ready');\n")
+        zf.writestr("background.js", "console.log('contoh extension ready');\n")
     ext_b64 = base64.b64encode(zip_buf.getvalue()).decode("ascii")
 
     prev_db = store.DB_PATH
@@ -1724,9 +1725,9 @@ def test_extension_sync(home_a, home_b, server_dir):
         launcher.PROFILES_DIR = home_a / "profiles"
         extensions.EXTENSIONS_DIR = home_a / "extensions"
 
-        uploaded_ext = extensions.upload("zidstore-helper.zip", ext_b64)
+        uploaded_ext = extensions.upload("contoh-helper.zip", ext_b64)
         slug = uploaded_ext["slug"]
-        assert slug == "zidstore-sync-helper"
+        assert slug == "contoh-sync-helper"
         assert (home_a / "extensions" / slug / "manifest.json").is_file()
 
         archive_bytes, archive_sha = extensions.get_extension_archive(slug)
@@ -1751,7 +1752,7 @@ def test_extension_sync(home_a, home_b, server_dir):
                 "SELECT * FROM extensions WHERE slug = ?", (slug,)
             ).fetchone()
             assert ext_row_b is not None
-            assert ext_row_b["title"] == "ZidStore Sync Helper"
+            assert ext_row_b["title"] == "Contoh Sync Helper"
             assert ext_row_b["version"] == "1.2.0"
 
         ext_dir_b = home_b / "extensions" / slug
@@ -1760,7 +1761,7 @@ def test_extension_sync(home_a, home_b, server_dir):
         assert (ext_dir_b / "background.js").is_file()
         assert (
             (ext_dir_b / "background.js").read_text(encoding="utf-8")
-            == "console.log('zidstore extension ready');\n"
+            == "console.log('contoh extension ready');\n"
         )
 
         listed_b = extensions.list_extensions()

@@ -2,7 +2,7 @@
 """Uji mandiri Kernel Manager fase 1 tanpa membuka jendela Chrome.
 
 Seluruh state ditulis ke direktori sementara di
-~/.hermes/cache/scratch/kernel-fase1, lalu dihapus setelah tes selesai.
+~/.cache/antidetect/test-scratch/kernel-fase1, lalu dihapus setelah tes selesai.
 """
 import importlib.util
 import io
@@ -23,7 +23,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 SCRATCH = Path(
     os.environ.get("ANTIDETECT_KERNEL_TEST_DIR")
-    or Path.home() / ".hermes" / "cache" / "scratch" / "kernel-fase1"
+    or Path.home() / ".cache" / "antidetect" / "test-scratch" / "kernel-fase1"
 )
 SCRATCH.mkdir(parents=True, exist_ok=True)
 ROOT = Path(tempfile.mkdtemp(prefix="run-", dir=SCRATCH))

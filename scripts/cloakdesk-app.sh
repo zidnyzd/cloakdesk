@@ -12,8 +12,8 @@ CANDIDATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 if [ -f "$CANDIDATE_DIR/ui/electron-main.cjs" ] && [ -d "$CANDIDATE_DIR/antidetect" ]; then
     PROJECT_DIR="$CANDIDATE_DIR"
-elif [ -f "/home/zdna/Projects/cloakdesk/ui/electron-main.cjs" ]; then
-    PROJECT_DIR="/home/zdna/Projects/cloakdesk"
+elif [ -f "$HOME/cloakdesk/ui/electron-main.cjs" ]; then
+    PROJECT_DIR="$HOME/cloakdesk"
 elif [ -f "/opt/cloakdesk/ui/electron-main.cjs" ]; then
     PROJECT_DIR="/opt/cloakdesk"
 else
@@ -21,8 +21,8 @@ else
 fi
 
 PYTHON_BIN="$PROJECT_DIR/venv/bin/python"
-if [ ! -x "$PYTHON_BIN" ] && [ -x "/home/zdna/Projects/cloakdesk/venv/bin/python" ]; then
-    PYTHON_BIN="/home/zdna/Projects/cloakdesk/venv/bin/python"
+if [ ! -x "$PYTHON_BIN" ] && [ -x "$HOME/cloakdesk/venv/bin/python" ]; then
+    PYTHON_BIN="$HOME/cloakdesk/venv/bin/python"
 fi
 
 # 0. Jika dipanggil dengan argumen subperintah CLI (misal: cloakdesk sync, cloakdesk list)
@@ -57,21 +57,21 @@ fi
 ELECTRON_BIN=""
 if [ -x "$PROJECT_DIR/ui/node_modules/electron/dist/electron" ]; then
     ELECTRON_BIN="$PROJECT_DIR/ui/node_modules/electron/dist/electron"
-elif [ -x "/home/zdna/Projects/cloakdesk/ui/node_modules/electron/dist/electron" ]; then
-    ELECTRON_BIN="/home/zdna/Projects/cloakdesk/ui/node_modules/electron/dist/electron"
+elif [ -x "$HOME/cloakdesk/ui/node_modules/electron/dist/electron" ]; then
+    ELECTRON_BIN="$HOME/cloakdesk/ui/node_modules/electron/dist/electron"
 elif [ -x "/opt/cloakdesk/ui/node_modules/electron/dist/electron" ]; then
     ELECTRON_BIN="/opt/cloakdesk/ui/node_modules/electron/dist/electron"
 elif [ -x "$PROJECT_DIR/ui/node_modules/.bin/electron" ]; then
     ELECTRON_BIN="$PROJECT_DIR/ui/node_modules/.bin/electron"
-elif [ -x "/home/zdna/Projects/cloakdesk/ui/node_modules/.bin/electron" ]; then
-    ELECTRON_BIN="/home/zdna/Projects/cloakdesk/ui/node_modules/.bin/electron"
+elif [ -x "$HOME/cloakdesk/ui/node_modules/.bin/electron" ]; then
+    ELECTRON_BIN="$HOME/cloakdesk/ui/node_modules/.bin/electron"
 elif command -v electron >/dev/null 2>&1; then
     ELECTRON_BIN="$(command -v electron)"
 fi
 
 MAIN_CJS="$PROJECT_DIR/ui/electron-main.cjs"
-if [ ! -f "$MAIN_CJS" ] && [ -f "/home/zdna/Projects/cloakdesk/ui/electron-main.cjs" ]; then
-    MAIN_CJS="/home/zdna/Projects/cloakdesk/ui/electron-main.cjs"
+if [ ! -f "$MAIN_CJS" ] && [ -f "$HOME/cloakdesk/ui/electron-main.cjs" ]; then
+    MAIN_CJS="$HOME/cloakdesk/ui/electron-main.cjs"
 fi
 
 export CHROME_DESKTOP="CloakDesk.desktop"

@@ -2,7 +2,7 @@
 """Uji perbaikan preferensi extension dan judul manifest i18n.
 
 Tanpa membuka engine browser. State ditulis ke direktori sementara di
-~/.hermes/cache/scratch/extension-prefs lalu dihapus setelah tes selesai.
+~/.cache/antidetect/test-scratch/extension-prefs lalu dihapus setelah tes selesai.
 """
 import base64
 import io
@@ -18,7 +18,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 SCRATCH = Path(
     os.environ.get("ANTIDETECT_EXT_PREF_TEST_DIR")
-    or Path.home() / ".hermes" / "cache" / "scratch" / "extension-prefs"
+    or Path.home() / ".cache" / "antidetect" / "test-scratch" / "extension-prefs"
 )
 SCRATCH.mkdir(parents=True, exist_ok=True)
 ROOT = Path(tempfile.mkdtemp(prefix="run-", dir=SCRATCH))

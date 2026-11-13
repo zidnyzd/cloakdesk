@@ -80,8 +80,8 @@ const kernelSummary = computed(() => {
 })
 const installPlaceholder = computed(() =>
   installForm.source_type === 'local_archive'
-    ? '/home/zdna/Downloads/ungoogled-chromium-152-linux.tar.xz'
-    : '/home/zdna/Downloads/ungoogled-chromium-152-linux'
+    ? '~/Downloads/ungoogled-chromium-152-linux.tar.xz'
+    : '~/Downloads/ungoogled-chromium-152-linux'
 )
 const installSourceLabel = computed(() =>
   installForm.source_type === 'local_archive' ? 'Path Arsip' : 'Path Folder'

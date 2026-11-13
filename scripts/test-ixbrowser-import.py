@@ -19,7 +19,7 @@ import time
 import urllib.request
 import zipfile
 
-SCRATCH_ROOT = Path("/home/zdna/.hermes/cache/scratch/antigravity")
+SCRATCH_ROOT = Path(os.environ.get("ANTIDETECT_TEST_SCRATCH") or Path.home() / ".cache" / "antidetect" / "test-scratch")
 SCRATCH_ROOT.mkdir(parents=True, exist_ok=True)
 TEST_HOME = Path(tempfile.mkdtemp(prefix="ixb-test-home-", dir=str(SCRATCH_ROOT)))
 os.environ["ANTIDETECT_HOME"] = str(TEST_HOME)
@@ -29,7 +29,7 @@ sys.path.insert(0, str(REPO))
 
 from antidetect import cookies, iximport, store  # noqa: E402
 
-MAIN_REPO = Path("/home/zdna/Projects/antidetect")
+MAIN_REPO = REPO
 COOKIES_ZIP = MAIN_REPO / "Export Profiles Cookies.zip"
 PROFILE_ZIP = MAIN_REPO / "Export Profile.zip"
 API_PORT = 53360

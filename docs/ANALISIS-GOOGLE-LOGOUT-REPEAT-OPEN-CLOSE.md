@@ -1,6 +1,6 @@
 # Analisis Ulang: Akar Masalah Logout Akun Google Saat Buka-Tutup Profil Berulang
 
-Repo: /home/zdna/Projects/antidetect (CloakDesk)
+Repo: cloakdesk (CloakDesk)
 Tanggal: 2026-11-11
 Auditor: Principal Systems Architect & Lead Infrastructure Security Engineer
 

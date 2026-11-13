@@ -27,7 +27,7 @@ Arsitektur yang dirancang memisahkan eksekusi browser dari penyimpanan terpusat:
 
 ## 3. Kondisi Kode Saat Ini
 
-Bagian ini merangkum struktur kode aktual di repositori `/home/zdna/Projects/antidetect` berdasarkan pemeriksaan graf simbol dan pembacaan langsung file sumber.
+Bagian ini merangkum struktur kode aktual di repositori `repositori/cloakdesk` berdasarkan pemeriksaan graf simbol dan pembacaan langsung file sumber.
 
 ### 3.1 Lokasi Data (`antidetect/paths.py` dan `antidetect/launcher.py`)
 * `antidetect/paths.py` mendefinisikan `DATA_DIR` yang membaca variabel lingkungan `ANTIDETECT_HOME` atau kembali ke `~/.local/share/antidetect`.
@@ -1211,10 +1211,10 @@ Implementasi dibagi menjadi 5 fase berurutan. **Fase 1 dan Fase 2 membentuk MVP 
 
 ## 14. Strategi Tes
 
-Seluruh rangkaian tes sinkronisasi harus mengikuti pola isolasi seperti `scripts/test-ixbrowser-import.py`: menggunakan direktori sementara di `/home/zdna/.hermes/cache/scratch/antidetect-wip`, menyetel `ANTIDETECT_HOME` terpisah untuk setiap device simulasi, **tidak menyentuh database asli pengguna** di `~/.local/share/antidetect/antidetect.db`, **tidak mencetak nilai cookie plaintext ke log/output**, dan **tidak perlu meluncurkan proses Chrome kecuali untuk satu tes integrasi akhir yang dibatasi ketat**.
+Seluruh rangkaian tes sinkronisasi harus mengikuti pola isolasi seperti `scripts/test-ixbrowser-import.py`: menggunakan direktori sementara di `~/.cache/antidetect/test-scratch`, menyetel `ANTIDETECT_HOME` terpisah untuk setiap device simulasi, **tidak menyentuh database asli pengguna** di `~/.local/share/antidetect/antidetect.db`, **tidak mencetak nilai cookie plaintext ke log/output**, dan **tidak perlu meluncurkan proses Chrome kecuali untuk satu tes integrasi akhir yang dibatasi ketat**.
 
 ### 14.1 Alat Tes yang Sudah Ada di Repo Sebagai Acuan
-1. `scripts/test-ixbrowser-import.py`: Kerangka acuan untuk membuat `ANTIDETECT_HOME` terisolasi di `/home/zdna/.hermes/cache/scratch/antidetect-wip`, menjalankan server lokal di port khusus, dan memverifikasi integritas cookie memakai hash SHA-256 tanpa membuka browser.
+1. `scripts/test-ixbrowser-import.py`: Kerangka acuan untuk membuat `ANTIDETECT_HOME` terisolasi di `~/.cache/antidetect/test-scratch`, menjalankan server lokal di port khusus, dan memverifikasi integritas cookie memakai hash SHA-256 tanpa membuka browser.
 2. `scripts/selftest.py`: Tes kontrak SDK resmi `ixbrowser-local-api` terhadap API lokal (wajib tetap lulus setelah perubahan `store.py` dan `api.py`).
 3. `scripts/isolation_test.py`: Tes isolasi cookie antar profil dan verifikasi `_graceful_close` (flush cookie saat tab ditutup lewat `/json/close/<id>`).
 4. `scripts/test-auth-proxy.py`: Tes end-to-end jembatan autentikasi proxy `gost`.

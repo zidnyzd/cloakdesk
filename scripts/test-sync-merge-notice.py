@@ -8,7 +8,7 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-SCRATCH_ROOT = Path("/home/zdna/.hermes/cache/scratch/antigravity")
+SCRATCH_ROOT = Path(os.environ.get("ANTIDETECT_TEST_SCRATCH") or Path.home() / ".cache" / "antidetect" / "test-scratch")
 SCRATCH_ROOT.mkdir(parents=True, exist_ok=True)
 WORK_DIR = Path(tempfile.mkdtemp(prefix="sync-merge-notice-", dir=str(SCRATCH_ROOT)))
 os.environ["ANTIDETECT_HOME"] = str(WORK_DIR / "home")

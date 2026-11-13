@@ -3,10 +3,19 @@ __pycache__/
 *.pyc
 *.log
 *.db
+*.db-shm
+*.db-wal
+*.bak
+*.sqlite
+*.sqlite3
 ui/node_modules/
 ui/dist/
 /build/
 /dist/
+# State runtime profil, kredensial sinkronisasi, dan environment lokal
+state.json
+sync_credentials.json
+.env
 # Ekspor ixBrowser berisi cookie sesi, jangan pernah masuk repo.
 /Export Profile*.zip
 # Index CodeGraph bersifat lokal, dibuat ulang dengan codegraph init.

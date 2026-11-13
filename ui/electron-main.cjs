@@ -13,8 +13,9 @@ app.commandLine.appendSwitch('class', 'CloakDesk')
 
 // Tentukan direktori root CloakDesk yang valid
 let projectRoot = path.resolve(__dirname, '..')
-if (!fs.existsSync(path.join(projectRoot, 'antidetect')) && fs.existsSync('/home/zdna/Projects/cloakdesk/antidetect')) {
-  projectRoot = '/home/zdna/Projects/cloakdesk'
+const homeDir = process.env.HOME || require('os').homedir()
+if (!fs.existsSync(path.join(projectRoot, 'antidetect')) && fs.existsSync(path.join(homeDir, 'cloakdesk', 'antidetect'))) {
+  projectRoot = path.join(homeDir, 'cloakdesk')
 }
 
 const pythonBin = path.join(projectRoot, 'venv', 'bin', 'python')

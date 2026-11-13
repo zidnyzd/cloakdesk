@@ -117,7 +117,7 @@ Mengembalikan daftar seluruh kernel yang terpasang (baik kernel builtin maupun s
       "name": "Engine Bawaan",
       "version": "Chromium 150.0.7839.0",
       "major_version": 150,
-      "path": "/home/zdna/.local/share/antidetect/squashfs-root/opt/ungoogled-chromium/chrome",
+      "path": "~/.local/share/antidetect/squashfs-root/opt/ungoogled-chromium/chrome",
       "profile_count": 48,
       "is_builtin": true,
       "builtin": true,
@@ -138,7 +138,7 @@ Mengembalikan daftar seluruh kernel yang terpasang (baik kernel builtin maupun s
       "name": "Chromium 152",
       "version": "Chromium 152.0.7950.0",
       "major_version": 152,
-      "path": "/home/zdna/.local/share/antidetect/kernels/chromium-152/chrome",
+      "path": "~/.local/share/antidetect/kernels/chromium-152/chrome",
       "profile_count": 3,
       "is_builtin": false,
       "builtin": false,
@@ -244,7 +244,7 @@ Mengubah kernel bawaan yang otomatis dipilih saat pengguna membuat profil baru.
 ```json
 {
   "default_kernel_id": "chromium-152",
-  "path": "/home/zdna/.local/share/antidetect/kernels/chromium-152/chrome"
+  "path": "~/.local/share/antidetect/kernels/chromium-152/chrome"
 }
 ```
 
@@ -360,14 +360,14 @@ Sesuai prinsip yang telah ditetapkan pada `docs/SYNC-PLAN.md:25`, berkas biner e
 3. **Keamanan Eksekusi Kode Jarak Jauh**: Mencegah vektor serangan di mana kompromi pada server sinkronisasi atau *man-in-the-middle* dapat menyuntikkan biner executable berbahaya ke perangkat klien saat melakukan `pull_changes` (`antidetect/sync_agent.py:455-527`).
 
 ### 6.2 Representasi Referensi Kernel di Payload Sinkronisasi
-Saat ini `_profile_sync_payload(conn, row)` di `antidetect/store.py:767-840` menyertakan seluruh isi `preference_config` (baris `825`) ke dalam payload sinkronisasi. Jika `preference_config` hanya menyimpan `"kernel_path": "/home/zdna/.local/share/antidetect/kernels/chromium-152/chrome"`, maka saat profil tersebut ditarik oleh Perangkat B (yang mungkin menggunakan nama pengguna Linux berbeda seperti `/home/operator/...`), path absolut tersebut pasti gagal dicocokkan.
+Saat ini `_profile_sync_payload(conn, row)` di `antidetect/store.py:767-840` menyertakan seluruh isi `preference_config` (baris `825`) ke dalam payload sinkronisasi. Jika `preference_config` hanya menyimpan `"kernel_path": "~/.local/share/antidetect/kernels/chromium-152/chrome"`, maka saat profil tersebut ditarik oleh Perangkat B (yang mungkin menggunakan nama pengguna Linux berbeda seperti `/home/operator/...`), path absolut tersebut pasti gagal dicocokkan.
 
 Untuk mengatasi masalah tersebut, referensi kernel di dalam `preference_config` diperkaya dengan identitas portabel:
 1. **Field Portabel di `preference_config`**:
    - Saat profil disimpan (`profile-create` di `antidetect/api.py:416`, `profile-update` di `antidetect/api.py:432`) atau disiapkan untuk outbox di `_profile_sync_payload` (`antidetect/store.py:825`), jika profil memakai kernel tertentu, objek `preference_config` menyimpan tiga atribut pendamping:
      - `kernel_id`: ID direktori kernel, misalnya `"chromium-152"` (atau `"builtin"`).
      - `kernel_version`: Nomor versi mayor atau string versi kernel, misalnya `"152"` (atau `"152.0.7950.0"`).
-     - `kernel_path`: Jalur lokal di mesin asal, misalnya `"/home/zdna/.local/share/antidetect/kernels/chromium-152/chrome"`.
+     - `kernel_path`: Jalur lokal di mesin asal, misalnya `"~/.local/share/antidetect/kernels/chromium-152/chrome"`.
 2. **Resolusi dan Fallback Otomatis Saat Sinkronisasi (`apply_remote_change`) dan Peluncuran (`kernel_for`)**:
    - Ketika Perangkat B menerima perubahan profil melalui `store.apply_remote_change(conn, change)` (`antidetect/store.py:1853-2043`), fungsi resolusi kernel lokal `launcher.resolve_synced_kernel_preference(pref_config)` dijalankan terhadap `pref_config` (`antidetect/store.py:1890-1892`):
      1. **Pencocokan berdasar `kernel_id`**: Jika Perangkat B memiliki kernel terpasang di `KERNELS_DIR / kernel_id / "chrome"`, maka `pref_config["kernel_path"]` diperbarui ke jalur lokal milik Perangkat B tanpa mengubah `sync_dirty` (`sync_dirty = 0` di `antidetect/store.py:1962`).
