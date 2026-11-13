@@ -73,6 +73,8 @@ const tags = ref([])
 const opened = ref(new Set())
 const openedSince = ref({})
 const nowTick = ref(Date.now())
+const cooldowns = ref({})
+const now = ref(Date.now())
 const visibleColumns = ref(loadVisibleColumns())
 const loading = ref(false)
 const selected = ref([])
@@ -167,6 +169,7 @@ const DATA_ACTIONS = {
 let searchTimer = null
 let pollTimer = null
 let clockTimer = null
+let cooldownTimer = null
 
 const groupMap = computed(() => new Map(groups.value.map((group) => [group.id, group.title])))
 const tagMap = computed(() => new Map(tags.value.map((tag) => [tag.id, tag.title])))
@@ -407,6 +410,21 @@ function markOpenedLocally(profileId) {
   }
 }
 
+function getCooldown(profileId) {
+  const target = cooldowns.value[profileId]
+  if (!target) return 0
+  const rem = Math.ceil((target - now.value) / 1000)
+  if (rem <= 0) {
+    delete cooldowns.value[profileId]
+    return 0
+  }
+  return rem
+}
+
+function startCooldown(profileId, seconds = 30) {
+  cooldowns.value[profileId] = Date.now() + seconds * 1000
+}
+
 async function openById(profileId, name) {
   markBusy(profileId, true)
   try {
@@ -446,10 +464,15 @@ async function toggleOpen(row) {
       return
     }
   }
+  if (!wasOpen && getCooldown(row.profile_id) > 0) {
+    ElMessage.warning(`Profil "${row.name}" masih dalam cooldown. Harap tunggu ${getCooldown(row.profile_id)} detik lagi.`)
+    return
+  }
   markBusy(row.profile_id, true)
   try {
     if (wasOpen) {
       await api.closeProfile(row.profile_id)
+      startCooldown(row.profile_id, 30)
       const next = new Set(opened.value)
       next.delete(row.profile_id)
       opened.value = next
@@ -469,6 +492,9 @@ async function toggleOpen(row) {
   } catch (error) {
     if (!wasOpen && error.code === 1009) {
       ElMessage.warning(`Profil "${row.name}" terkunci oleh perangkat lain: ${error.message}`)
+      await loadProfiles()
+    } else if (!wasOpen && error.code === 1010) {
+      ElMessage.warning(`Profil "${row.name}" masih dalam cooldown: ${error.message}`)
       await loadProfiles()
     } else {
       ElMessage.error(`${wasOpen ? 'Gagal menutup' : 'Gagal membuka'}: ${error.message}`)
@@ -860,7 +886,10 @@ async function runBulk(command) {
     try {
       await api.closeProfiles(targets.map((profile) => profile.profile_id))
       const next = new Set(opened.value)
-      for (const profile of targets) next.delete(profile.profile_id)
+      for (const profile of targets) {
+        next.delete(profile.profile_id)
+        startCooldown(profile.profile_id, 30)
+      }
       opened.value = next
       ElMessage.success(`${targets.length} profil ditutup`)
     } catch (error) {
@@ -1094,11 +1123,15 @@ onMounted(() => {
   clockTimer = setInterval(() => {
     if (opened.value.size) nowTick.value = Date.now()
   }, 1000)
+  cooldownTimer = setInterval(() => {
+    now.value = Date.now()
+  }, 1000)
 })
 
 onUnmounted(() => {
   clearInterval(pollTimer)
   clearInterval(clockTimer)
+  clearInterval(cooldownTimer)
   clearTimeout(searchTimer)
 })
 
@@ -1359,13 +1392,33 @@ useOnRefresh(() => refreshAll())
           <template #default="{ row }">
             <div class="row-actions">
               <el-button
+                v-if="isOpen(row)"
                 size="small"
-                :type="isOpen(row) ? 'default' : 'primary'"
+                type="default"
                 :loading="!!busy[row.profile_id]"
                 class="open-button"
                 @click="toggleOpen(row)"
               >
-                {{ isOpen(row) ? 'Tutup' : 'Buka' }}
+                Tutup
+              </el-button>
+              <el-button
+                v-else-if="getCooldown(row.profile_id) > 0"
+                size="small"
+                type="info"
+                :disabled="true"
+                class="open-button"
+              >
+                {{ `Tunggu ${getCooldown(row.profile_id)}s` }}
+              </el-button>
+              <el-button
+                v-else
+                size="small"
+                type="primary"
+                :loading="!!busy[row.profile_id]"
+                class="open-button"
+                @click="toggleOpen(row)"
+              >
+                Buka
               </el-button>
               <el-tooltip content="Edit profil" placement="top" :show-after="200">
                 <el-button size="small" class="icon-action" :icon="Edit" aria-label="Edit profil" @click="openEdit(row)" />

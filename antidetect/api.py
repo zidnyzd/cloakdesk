@@ -888,6 +888,7 @@ def profile_open(params):
     pid = _pid(params)
     force_raw = params.get("force_lease") if "force_lease" in params else params.get("force")
     force_lease = _bool_flag(force_raw, default=False)
+    force = _bool_flag(params.get("force"), default=False)
     with store.db() as conn:
         row = _active_profile(conn, pid)
         profile = store.profile_to_dict(row, include_seed=True)
@@ -895,7 +896,7 @@ def profile_open(params):
     profile["id"] = pid
     try:
         result = launcher.open_profile(
-            profile, app_args=params.get("args"), force_lease=force_lease
+            profile, app_args=params.get("args"), force_lease=force_lease, force=force
         )
     except sync_agent.SyncLeaseError as error:
         raise ApiError(1009, str(error))
@@ -903,6 +904,8 @@ def profile_open(params):
         err_code = getattr(error, "code", None)
         if err_code == 1009 or "sedang dibuka di perangkat" in str(error):
             raise ApiError(1009, str(error))
+        if err_code == 1010:
+            raise ApiError(1010, str(error))
         raise ApiError(1003, str(error))
     with store.db() as conn:
         store.mark_opened(conn, pid)
@@ -915,6 +918,7 @@ def profile_open_random(params):
     pid = _pid(params)
     force_raw = params.get("force_lease") if "force_lease" in params else params.get("force")
     force_lease = _bool_flag(force_raw, default=False)
+    force = _bool_flag(params.get("force"), default=False)
     with store.db() as conn:
         row = _active_profile(conn, pid)
         name = row["name"]
@@ -933,7 +937,7 @@ def profile_open_random(params):
     profile["id"] = pid
     try:
         result = launcher.open_profile(
-            profile, app_args=params.get("args"), force_lease=force_lease
+            profile, app_args=params.get("args"), force_lease=force_lease, force=force
         )
     except sync_agent.SyncLeaseError as error:
         raise ApiError(1009, str(error))
@@ -941,6 +945,8 @@ def profile_open_random(params):
         err_code = getattr(error, "code", None)
         if err_code == 1009 or "sedang dibuka di perangkat" in str(error):
             raise ApiError(1009, str(error))
+        if err_code == 1010:
+            raise ApiError(1010, str(error))
         raise ApiError(1003, str(error))
     with store.db() as conn:
         store.mark_opened(conn, pid)

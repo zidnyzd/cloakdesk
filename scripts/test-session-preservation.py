@@ -566,6 +566,142 @@ def t4_graceful_close_sends_browser_close():
     check("t4_browser_close_result", res is True)
 
 
+def t4_graceful_close_network_journal_wait():
+    _setup_store()
+    pid = 402
+    ddir = PROFILES_DIR / str(pid) / "data"
+    jpath = ddir / "Default" / "Network" / "Cookies-journal"
+    jpath.parent.mkdir(parents=True, exist_ok=True)
+    jpath.write_text("x")
+    import threading
+
+    def remover():
+        time.sleep(0.2)
+        try:
+            jpath.unlink()
+        except Exception:
+            pass
+
+    t = threading.Thread(target=remover)
+    t.start()
+    res = launcher._graceful_close(None, proc=None, pid=0, timeout=1.0, data_dir=str(ddir))
+    t.join(timeout=1)
+    check("t4_network_journal_wait_returns", res is True)
+    check("t4_network_journal_removed", not jpath.exists())
+
+
+def t4_graceful_close_prefers_browser_close_without_page_close():
+    _setup_store()
+    import urllib.request
+    sent = {"cmd": None}
+    call_kwargs = {}
+    close_calls = {"count": 0}
+
+    class FakeWS:
+        def __init__(self, *args, **kwargs):
+            pass
+        def send(self, msg):
+            sent["cmd"] = msg
+        def recv(self):
+            return ""
+        def settimeout(self, t):
+            pass
+        def close(self):
+            pass
+
+    fake_version = {"webSocketDebuggerUrl": "ws://127.0.0.1:1/debugger"}
+    body_version = json.dumps(fake_version).encode("utf-8")
+    body_list = json.dumps([
+        {"type": "page", "id": "p1"},
+        {"type": "page", "id": "p2"}
+    ]).encode("utf-8")
+
+    class FakeResponse:
+        def __init__(self, body):
+            self._body = body
+            self.status = 200
+            self.headers = {"content-type": "application/json"}
+        def read(self):
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    def fake_urlopen(url, timeout=0):
+        if url.endswith("/json/version"):
+            return FakeResponse(body_version)
+        if url.endswith("/json/list"):
+            return FakeResponse(body_list)
+        if "/json/close/" in url:
+            close_calls["count"] += 1
+            return FakeResponse(b"")
+        raise Exception("other")
+
+    import websocket
+    orig_create = websocket.create_connection
+    def fake_create(*args, **kwargs):
+        call_kwargs.update(kwargs)
+        return FakeWS(*args, **kwargs)
+    websocket.create_connection = fake_create
+    try:
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            res = launcher._graceful_close("127.0.0.1:1", proc=None, pid=0, timeout=1.0)
+    finally:
+        websocket.create_connection = orig_create
+    check("t4_prefers_browser_close_sent", sent["cmd"] == json.dumps({"id": 1, "method": "Browser.close"}))
+    check("t4_prefers_browser_close_no_page_close", close_calls["count"] == 0)
+    check("t4_prefers_browser_close_result", res is True)
+
+
+def t4_graceful_close_falls_back_to_page_close_on_ws_error():
+    _setup_store()
+    import urllib.request
+    close_calls = {"count": 0}
+
+    fake_version = {"webSocketDebuggerUrl": "ws://127.0.0.1:1/debugger"}
+    body_version = json.dumps(fake_version).encode("utf-8")
+    body_list = json.dumps([
+        {"type": "page", "id": "p1"},
+        {"type": "page", "id": "p2"}
+    ]).encode("utf-8")
+
+    class FakeResponse:
+        def __init__(self, body):
+            self._body = body
+            self.status = 200
+            self.headers = {"content-type": "application/json"}
+        def read(self):
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    def fake_urlopen(url, timeout=0):
+        if url.endswith("/json/version"):
+            return FakeResponse(body_version)
+        if url.endswith("/json/list"):
+            return FakeResponse(body_list)
+        if "/json/close/" in url:
+            close_calls["count"] += 1
+            return FakeResponse(b"")
+        raise Exception("other")
+
+    import websocket
+    orig_create = websocket.create_connection
+    def fake_create_fail(*args, **kwargs):
+        raise Exception("ws error")
+    websocket.create_connection = fake_create_fail
+    try:
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            res = launcher._graceful_close("127.0.0.1:1", proc=None, pid=0, timeout=1.0)
+    finally:
+        websocket.create_connection = orig_create
+    check("t4_fallback_page_close_called", close_calls["count"] == 2)
+    check("t4_fallback_result", res is True)
+
+
 # --- Fase sync guard tests ---
 def t5_guard_skips_empty_upload():
     _setup_store()
@@ -973,6 +1109,94 @@ def t8_gmail_at_preserved_after_dedupe():
     check("t8_gmail_paths_0_to_9", paths == [f"/mail/u/{i}" for i in range(10)])
 
 
+def t9_cooldown_blocks_immediate_open():
+    _setup_store()
+    os.environ.pop("ANTIDETECT_NO_COOLDOWN", None)
+    os.environ["ANTIDETECT_COOLDOWN_SECONDS"] = "30"
+    launcher._closed_at.clear()
+
+    pid = 901
+    launcher._closed_at[pid] = time.time()
+
+    profile = {"id": pid, "name": "Test", "seed": 1000000000}
+    blocked = False
+    try:
+        launcher.open_profile(profile)
+    except launcher.LaunchError as e:
+        if getattr(e, "code", None) == 1010:
+            blocked = True
+    except Exception:
+        pass
+    check("t9_cooldown_blocks_immediate_open", blocked)
+    launcher._closed_at.clear()
+
+
+def t9_cooldown_bypassed_with_force():
+    _setup_store()
+    os.environ.pop("ANTIDETECT_NO_COOLDOWN", None)
+    os.environ["ANTIDETECT_COOLDOWN_SECONDS"] = "30"
+    launcher._closed_at.clear()
+
+    pid = 902
+    launcher._closed_at[pid] = time.time()
+
+    profile = {"id": pid, "name": "Test", "seed": 1000000000}
+
+    with mock.patch("subprocess.Popen", side_effect=OSError("Mocked launch")):
+        blocked = False
+        try:
+            launcher.open_profile(profile, force=True)
+        except launcher.LaunchError as e:
+            if getattr(e, "code", None) == 1010:
+                blocked = True
+        except Exception:
+            pass
+
+    check("t9_cooldown_bypassed_with_force", not blocked)
+    launcher._closed_at.clear()
+
+
+def t9_cooldown_disabled_via_env():
+    _setup_store()
+    launcher._closed_at.clear()
+
+    pid = 903
+    launcher._closed_at[pid] = time.time()
+
+    profile = {"id": pid, "name": "Test", "seed": 1000000000}
+
+    os.environ["ANTIDETECT_NO_COOLDOWN"] = "1"
+    check("t9_no_cooldown_env", launcher.cooldown_seconds() == 0)
+
+    with mock.patch("subprocess.Popen", side_effect=OSError("Mocked launch")):
+        blocked = False
+        try:
+            launcher.open_profile(profile)
+        except launcher.LaunchError as e:
+            if getattr(e, "code", None) == 1010:
+                blocked = True
+        except Exception:
+            pass
+    check("t9_no_cooldown_bypasses", not blocked)
+    os.environ.pop("ANTIDETECT_NO_COOLDOWN", None)
+
+    os.environ["ANTIDETECT_COOLDOWN_SECONDS"] = "0"
+    check("t9_zero_cooldown_env", launcher.cooldown_seconds() == 0)
+
+    with mock.patch("subprocess.Popen", side_effect=OSError("Mocked launch")):
+        blocked = False
+        try:
+            launcher.open_profile(profile)
+        except launcher.LaunchError as e:
+            if getattr(e, "code", None) == 1010:
+                blocked = True
+        except Exception:
+            pass
+    check("t9_zero_cooldown_bypasses", not blocked)
+    os.environ["ANTIDETECT_COOLDOWN_SECONDS"] = "30"
+    launcher._closed_at.clear()
+
+
 def main():
     tests = [
         t1_ensure_injects_new, t1_alias_works, t1_idempotent_restore, t1_idempotent_restore_4_migration, t1_idempotent_restore_other_not_overwritten, t1_idempotent_restore_other_2_not_overwritten, t1_idempotent_no_change,
@@ -986,6 +1210,7 @@ def main():
         t3_update_cookies_signature,
         t4_graceful_close_no_address_process_gone, t4_graceful_close_no_address_process_alive,
         t4_graceful_close_journal_wait, t4_graceful_close_signature, t4_close_profile_passes_data_dir, t4_graceful_close_sends_browser_close,
+        t4_graceful_close_network_journal_wait, t4_graceful_close_prefers_browser_close_without_page_close, t4_graceful_close_falls_back_to_page_close_on_ws_error,
         t5_guard_skips_empty_upload, t5_nonempty_upload_called, t5_sync_guard_returns_cookie_res_none_on_empty,
         t5_ensure_alias_exists, t5_ensure_password_manager_exists,
         t6_extra_counts, t6_empty_update_preserve_default, t6_empty_update_preserve_true_explicit,
@@ -995,6 +1220,7 @@ def main():
         t7_dedupe_removes_duplicates, t7_deduke_session_preserved, t7_dedupe_refuses_when_open,
         t8_insert_removes_scheme_port_cross_variants, t8_insert_canonical_from_latest_existing,
         t8_dedupe_merges_cross_variant, t8_dedupe_merges_scheme_port_variant, t8_gmail_at_preserved_after_dedupe,
+        t9_cooldown_blocks_immediate_open, t9_cooldown_bypassed_with_force, t9_cooldown_disabled_via_env,
     ]
     for t in tests:
         try:

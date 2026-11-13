@@ -76,7 +76,24 @@ SEED_SAFE_INDEXES = tuple(
 )
 
 _open = {}
+_closed_at = {}
 _flag_cache = {}
+
+
+def cooldown_seconds():
+    if os.environ.get("ANTIDETECT_NO_COOLDOWN") == "1":
+        return 0
+    try:
+        return max(0, int(os.environ.get("ANTIDETECT_COOLDOWN_SECONDS", "30")))
+    except (TypeError, ValueError):
+        return 30
+
+
+def reset_cooldown(profile_id=None):
+    if profile_id is None:
+        _closed_at.clear()
+    else:
+        _closed_at.pop(profile_id, None)
 
 
 def flag_supported(name, binary=None):
@@ -1229,44 +1246,36 @@ def _wait_for_devtools(port, deadline):
 
 def _graceful_close(debugging_address, proc=None, pid=0, timeout=10.0, data_dir=None):
     """Close every page target so Chromium flushes cookies before exiting."""
-    journal = None
+    # Kandidat path journal yang bisa ada
+    journal_candidates = []
     if data_dir:
-        journal = Path(data_dir) / "Default" / "Cookies-journal"
+        journal_candidates.append(Path(data_dir) / "Default" / "Network" / "Cookies-journal")
+        journal_candidates.append(Path(data_dir) / "Default" / "Cookies-journal")
 
     def _wait_journal():
-        if journal and journal.exists():
-            j_deadline = time.time() + 3.0
-            while time.time() < j_deadline:
-                if not journal.exists():
-                    break
-                time.sleep(0.05)
+        # Jika tidak ada kandidat atau tidak ada yang ada, selesai
+        if not any(cand.exists() for cand in journal_candidates):
+            return
+        # Tunggu hingga SEMUA kandidat tidak ada lagi, deadline 5.0 detik
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            if not any(cand.exists() for cand in journal_candidates):
+                break
+            time.sleep(0.05)
 
     if not debugging_address:
         gone = _process_gone(proc, pid)
         if gone:
             _wait_journal()
         return gone
+
     base = f"http://{debugging_address}"
-    try:
-        with urllib.request.urlopen(base + "/json/list", timeout=2) as response:
-            targets = json.load(response)
-    except Exception:
-        gone = _process_gone(proc, pid)
-        if gone:
-            _wait_journal()
-        return gone
-
-    pages = [t for t in targets if t.get("type") == "page" and t.get("id")]
-    for target in pages:
-        try:
-            urllib.request.urlopen(f"{base}/json/close/{target['id']}", timeout=2).read()
-        except Exception:
-            pass
-
-    # Kirim Browser.close melalui CDP websocket agar proses Chromium keluar
-    # sendiri dan menulis cookie sesi ke disk. Kegagalan websocket tidak
-    # boleh membuat penutupan gagal total; fallback ke perilaku lama.
     t0 = time.time()
+
+    # Phase 1: Coba WebSocket Browser.close terlebih dahulu
+    browser_closed = False
+    ws_failed = False
+
     try:
         with urllib.request.urlopen(base + "/json/version", timeout=2) as response:
             version_info = json.load(response)
@@ -1292,9 +1301,26 @@ def _graceful_close(debugging_address, proc=None, pid=0, timeout=10.0, data_dir=
                     except Exception:
                         pass
             except Exception:
-                pass
+                ws_failed = True
+            else:
+                browser_closed = True
     except Exception:
-        pass
+        ws_failed = True
+
+    # Phase 2: Fallback ke penutupan per-tab jika websocket gagal
+    if ws_failed:
+        try:
+            with urllib.request.urlopen(base + "/json/list", timeout=2) as response:
+                targets = json.load(response)
+        except Exception:
+            targets = []
+
+        pages = [t for t in targets if t.get("type") == "page" and t.get("id")]
+        for target in pages:
+            try:
+                urllib.request.urlopen(f"{base}/json/close/{target['id']}", timeout=2).read()
+            except Exception:
+                pass
 
     # Tunggu proses benar-benar selesai (termasuk kasus page kosong)
     # dengan sisa waktu dari parameter timeout.
@@ -1303,10 +1329,12 @@ def _graceful_close(debugging_address, proc=None, pid=0, timeout=10.0, data_dir=
     while time.time() < deadline:
         if _process_gone(proc, pid):
             _wait_journal()
+            time.sleep(0.3)  # Stabilisasi pasca-exit agar OS melepaskan lock
             return True
         time.sleep(0.1)
     if _process_gone(proc, pid):
         _wait_journal()
+        time.sleep(0.3)  # Stabilisasi pasca-exit agar OS melepaskan lock
         return True
     _wait_journal()
     return False
@@ -1396,10 +1424,21 @@ def _state_payload(profile_id):
     return payload
 
 
-def open_profile(profile, app_args=None, force_lease=False):
+def open_profile(profile, app_args=None, force_lease=False, force=False):
     profile_id = profile["id"]
     if is_open(profile_id) and not _multi_instance_enabled(profile):
         return _open[profile_id]["info"]
+
+    cd_limit = cooldown_seconds()
+    if cd_limit > 0 and not force and not profile.get("force") and not profile.get("skip_cooldown"):
+        last_closed = _closed_at.get(profile_id, 0.0)
+        elapsed = time.time() - last_closed
+        if elapsed < cd_limit:
+            rem = int(cd_limit - elapsed) + 1
+            raise LaunchError(
+                f"Profil baru saja ditutup. Harap tunggu {rem} detik lagi demi stabilitas sesi akun.",
+                code=1010,
+            )
 
     profile_uuid = profile.get("uuid")
     if not profile_uuid and profile_id is not None:
@@ -1581,6 +1620,8 @@ def close_profile(profile_id):
         if clean_exit:
             _sync_cookies_after_close(profile_id, info)
         _release_profile_lease(profile_id, info)
+        if closed > 0:
+            _closed_at[profile_id] = time.time()
         return closed > 0
     proc = entry["proc"] if entry else None
     pid = int(info.get("pid") or 0)
@@ -1594,6 +1635,7 @@ def close_profile(profile_id):
     if clean_exit:
         _sync_cookies_after_close(profile_id, info)
     _release_profile_lease(profile_id, info)
+    _closed_at[profile_id] = time.time()
     return True
 
 

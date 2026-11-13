@@ -1,13 +1,13 @@
 # CloakDesk
 
-<p align="center">
+<center>
   <img src="assets/cloakdesk-logo.png" alt="CloakDesk Logo" width="160" height="160" />
-</p>
+</center>
 
-<p align="center">
+<center>
   <b>Manajer Profil Browser Anti-Detect Mandiri untuk Linux</b><br />
-  Kompatibel penuh dengan SDK ixBrowser Local API v2, local-first, tanpa ketergantungan cloud pihak ketiga, dilengkapi sinkronisasi multi-perangkat terenkripsi end-to-end.
-</p>
+  Kompatibel penuh dengan SDK ixBrowser Local API v2, berjalan lokal tanpa ketergantungan cloud pihak ketiga, dilengkapi sinkronisasi multi-perangkat terenkripsi ujung ke ujung.
+</center>
 
 ---
 
@@ -28,7 +28,7 @@ Selain sebagai peluncur lokal, CloakDesk dilengkapi arsitektur **sinkronisasi mu
 - **Kompatibilitas SDK ixBrowser**: Meniru endpoint `/api/v2/<action>` ixBrowser v2 secara transparan, lengkap dengan format respons standar dan pagination.
 - **Dukungan Proxy Lengkap dengan Autentikasi**: Mendukung proxy Direct, HTTP, HTTPS, dan SOCKS5. Proxy yang membutuhkan autentikasi username/password dijembatani otomatis via proses `gost` per profil.
 - **Sinkronisasi Multi-Perangkat (Self-Hosted VPS)**:
-  - **Server Mandiri**: Berjalan sebagai kontainer ringan atau binary Python di VPS dengan database SQLite WAL.
+  - **Server Mandiri**: Berjalan sebagai kontainer ringan atau proses Python di VPS dengan database SQLite WAL.
   - **Kunci Profil Terdistribusi (Distributed Profile Lease)**: Mencegah pembukaan profil yang sama secara bersamaan di dua komputer (TTL 60 detik, heartbeat otomatis 20 detik, dan fencing token monotonik).
   - **Enkripsi Klien Zero-Knowledge**: Cookie sesi dan password dienkripsi dengan AES-256-GCM berbasis kunci turunan frasa sandi pengguna (*passphrase*) sebelum diunggah ke server.
   - **Dukungan Buka Offline**: Profil tetap dapat dibuka dan diedit saat komputer offline (*Allow with Warning*), antrean perubahan tersimpan di outbox lokal dan otomatis dikirim saat kembali online.
@@ -36,56 +36,123 @@ Selain sebagai peluncur lokal, CloakDesk dilengkapi arsitektur **sinkronisasi mu
   - Mengimpor file zip ekspor cookie (`<serial>_<judul>.txt`) dan metadata spreadsheet (`excel.xlsx`).
   - Pemetaan grup, penentuan platform otomatis dari domain cookie, dan pembacaan cookie Chromium v10.
   - Tersedia lewat antarmuka dialog GUI dan perintah CLI `scripts/import-ixbrowser.py`.
-- **Penutupan Bersih (Graceful Shutdown)**: Seluruh tab halaman ditutup melalui DevTools Protocol (`/json/close/<id>`) sebelum proses dimatikan, menjamin seluruh cookie SQLite ter-flush sempurna ke disk.
+- **Penutupan Profil & Preservasi Sesi Akun Google**:
+  - Penutupan bersih dilakukan via protokol DevTools (`Browser.close` pada CDP WebSocket) agar Chromium menutup seluruh tab secara atomik dari dalam, memicu `SessionService::Save`, dan mem-flush snapshot sesi serta session cookie ke disk secara utuh (dengan fallback penutupan per-tab `/json/close` hanya jika WebSocket gagal).
+  - Memantau penyelesaian rollback journal SQLite di kedua lokasi standar Chromium (`Default/Network/Cookies-journal` dan `Default/Cookies-journal`) sebelum proses dianggap selesai.
+- **Cooldown Keamanan 30 Detik (Anti Rapid-Restart)**:
+  - Mencegah pembukaan kembali profil yang baru ditutup selama 30 detik (baik dari countdown tombol UI maupun validasi backend API), menjaga cookie rotasi waktu Google (`__Secure-1PSIDTS` dan `__Secure-3PSIDTS`) tetap sinkron sehingga sesi login multi-akun tidak dicabut oleh heuristik server Google.
+  - Durasi cooldown dapat dikonfigurasi melalui variabel lingkungan `ANTIDETECT_COOLDOWN_SECONDS` (default `30`), atau dinonaktifkan sementara untuk kebutuhan skrip otomatisasi dengan `ANTIDETECT_NO_COOLDOWN=1`.
 - **Pembersihan Otomatis Proses Mati**: Jika jendela browser ditutup langsung dari tombol silang desktop (X11), status profil di memori dan kunci lease langsung dibersihkan otomatis.
-- **Antarmuka Desktop Modern**: Dashboard berbasis Vue 3 + Element Plus di port `5180` dengan tema bersih, indikator status sinkronisasi topbar, badge lease perangkat lain, dialog manajemen profil 5 tab, keranjang sampah, dan log aktivitas lokal.
+- **Antarmuka Desktop Modern**: Dashboard berbasis Vue 3 + Element Plus yang disajikan langsung oleh server lokal di `http://127.0.0.1:53200` dengan tema bersih, indikator status sinkronisasi topbar, badge lease perangkat lain, manajemen kernel Chromium, dialog profil 5 tab, keranjang sampah, dan log aktivitas lokal.
 
 ---
 
-## Memulai Cepat (Penggunaan Lokal)
+## Panduan Instalasi dari Nol (Clone Baru)
 
-### 1. Menjalankan Server API Lokal
+### 1. Prasyarat Sistem Linux
+
+Pastikan sistem Linux (Debian, Ubuntu, Linux Mint, Fedora, Arch) telah memiliki paket dasar berikut:
+
+- **Python 3.10+** beserta `venv` dan `pip`:
+  ```bash
+  # Debian / Ubuntu / Linux Mint
+  sudo apt update && sudo apt install -y python3 python3-venv python3-pip curl
+  ```
+- **Node.js 20+ dan npm** (untuk membangun antarmuka Web UI):
+  ```bash
+  # Debian / Ubuntu / Linux Mint
+  sudo apt install -y nodejs npm
+  ```
+
+### 2. Klon Repositori dan Instalasi Dependensi Python
 
 ```bash
-# Masuk ke direktori proyek dan aktifkan virtualenv
-cd /home/zdna/Projects/antidetect
+git clone https://github.com/zidnyzd/antidetect.git cloakdesk
+cd cloakdesk
+
+# Buat virtual environment dan pasang dependensi Python
+python3 -m venv venv
+./venv/bin/pip install -r requirements.txt
+```
+
+### 3. Penyiapan Engine Fingerprint Chromium
+
+CloakDesk membutuhkan engine browser *fingerprint-chromium* 150 (berbasis ungoogled-chromium yang mendukung flag `--fingerprint=<seed>`).
+
+- **Lokasi Default Engine**:
+  CloakDesk secara otomatis mencari biner engine di:
+  `~/.local/share/antidetect/squashfs-root/opt/ungoogled-chromium/chrome`
+  (atau lokasi kustom melalui environment variable `ANTIDETECT_ENGINE_DIR`).
+- **Ekstraksi dari AppImage (Jika Memiliki `engine.AppImage`)**:
+  Jika engine didistribusikan dalam format AppImage, ekstrak terlebih dahulu ke direktori tersebut:
+  ```bash
+  mkdir -p ~/.local/share/antidetect/squashfs-root
+  ./engine.AppImage --appimage-extract >/dev/null 2>&1
+  mv squashfs-root ~/.local/share/antidetect/
+  ```
+- **Manajemen Multi-Kernel (Opsional)**:
+  Untuk memasang atau mengelola versi kernel Chromium tambahan, CloakDesk menyediakan:
+  ```bash
+  ./scripts/install-kernel.sh /path/ke/arsip-kernel.tar.xz "Nama Kernel"
+  ```
+  Kernel yang terpasang akan tersimpan di `~/.local/share/antidetect/kernels/` dan dapat dipilih langsung dari tab Kernel di antarmuka CloakDesk.
+
+### 4. Build Antarmuka Pengguna (Web UI) dan Menjalankan Server
+
+Terdapat dua cara menjalankan CloakDesk sesuai kebutuhan:
+
+#### Opsi A: Menjalankan Aplikasi Lengkap (Mode Produksi / Harian)
+
+Server backend otomatis menyajikan antarmuka Vue 3 yang telah dikompilasi (`ui/dist`) langsung pada port `53200`:
+
+```bash
+# Masuk ke folder ui, pasang dependensi npm, lalu build antarmuka
+cd ui
+npm install
+npm run build
+cd ..
+
+# Jalankan server backend CloakDesk
 ./venv/bin/python -m antidetect serve
 ```
 
-API lokal akan aktif di `http://127.0.0.1:53200` dan siap menerima permintaan.
+Buka peramban Anda dan akses **http://127.0.0.1:53200**. Seluruh fitur antarmuka dan API lokal aktif dalam satu port.
 
-### 2. Menjalankan Antarmuka Pengguna (Web UI)
+#### Opsi B: Mode Pengembangan Frontend (Hot Reload)
+
+Jika Anda mengembangkan atau memodifikasi kode Vue di `ui/src`:
+
+1. Terminal 1 (Backend API):
+   ```bash
+   ./venv/bin/python -m antidetect serve
+   ```
+2. Terminal 2 (Frontend Vite Dev Server):
+   ```bash
+   cd ui
+   npm install
+   npm run dev
+   ```
+3. Buka peramban di **http://127.0.0.1:5180**. Vite dev server akan melakukan *hot reload* otomatis setiap kali berkas Vue berubah.
+
+---
+
+## Penggunaan Perintah CLI
+
+Selain antarmuka grafis, CloakDesk menyediakan CLI terpadu melalui modul `antidetect`:
 
 ```bash
-cd ui
-npm run dev
-```
-
-Buka peramban di `http://127.0.0.1:5180`. Antarmuka Vue akan terhubung langsung ke API lokal di port 53200.
-
-Untuk kompilasi produksi mandiri:
-```bash
-cd ui
-npm run build
-```
-
-### 3. Penggunaan Perintah CLI
-
-CloakDesk menyediakan antarmuka CLI terpadu:
-
-```bash
-# Menampilkan bantuan perintah
-python3 -m antidetect --help
+# Menampilkan seluruh daftar perintah
+./venv/bin/python -m antidetect --help
 
 # Membuat profil baru
-python3 -m antidetect create "Toko Utama" --platform Windows --tz Asia/Jakarta --lang id-ID
+./venv/bin/python -m antidetect create "Toko Utama" --platform Windows --tz Asia/Jakarta --lang id-ID
 
 # Membuka dan menutup profil
-python3 -m antidetect open 1
-python3 -m antidetect close 1
+./venv/bin/python -m antidetect open 1
+./venv/bin/python -m antidetect close 1
 
 # Menampilkan daftar profil
-python3 -m antidetect list
+./venv/bin/python -m antidetect list
 ```
 
 ---
@@ -134,7 +201,7 @@ python3 -m antidetect sync-server token create --label "Laptop Utama" --ttl 120
 
 ### 2. Menghubungkan Komputer Lokal
 
-1. Buka antarmuka CloakDesk di browser (`http://127.0.0.1:5180/#/settings`).
+1. Buka antarmuka CloakDesk di browser (`http://127.0.0.1:53200/#/settings`).
 2. Masuk ke kartu **Sinkronisasi Antar Perangkat**.
 3. Masukkan:
    - **URL Server**: Alamat server VPS kamu (misalnya `https://sync.domainanda.com` atau `http://IP_VPS:53210`).
@@ -195,22 +262,31 @@ Pada antarmuka GUI, tombol **Impor ixBrowser** di toolbar daftar profil menyedia
 
 ## Pengujian Mandiri Otomatis
 
-CloakDesk dilengkapi rangkaian skrip pengujian komprehensif tanpa perlu membuka browser secara manual:
+CloakDesk dilengkapi rangkain skrip pengujian otomatis untuk memverifikasi integritas sistem tanpa merusak data pengguna:
 
 ```bash
-# Pengujian kontrak SDK resmi ixBrowser
+# Pengujian preservasi sesi, penutupan Browser.close, dan cooldown 30 detik (63 skenario)
+./venv/bin/python scripts/test-session-preservation.py
+
+# Pengujian preferensi ekstensi
+./venv/bin/python scripts/test-extension-prefs.py
+
+# Pengujian penggabungan sinkronisasi
+./venv/bin/python scripts/test-sync-merge-notice.py
+
+# Pengujian kontrak SDK resmi ixBrowser (server harus berjalan)
 ./venv/bin/python scripts/selftest.py
 
-# Pengujian isolasi cookie dan penutupan bersih
+# Pengujian isolasi cookie dan penutupan bersih (DISPLAY=:0)
 DISPLAY=:0 ./venv/bin/python scripts/isolation_test.py
 
 # Pengujian jembatan autentikasi proxy gost lokal
 ./venv/bin/python scripts/test-auth-proxy.py
 
-# Pengujian impor arsip ixBrowser (19 skenario verifikasi)
+# Pengujian impor arsip ixBrowser
 ./venv/bin/python scripts/test-ixbrowser-import.py
 
-# Pengujian sinkronisasi multi-perangkat (Fase 1 sampai Fase 5)
+# Pengujian sinkronisasi multi-perangkat
 ./venv/bin/python scripts/test-sync.py
 ```
 
@@ -223,27 +299,28 @@ DISPLAY=:0 ./venv/bin/python scripts/isolation_test.py
 ├── assets/                          # Asset visual (logo CloakDesk SVG dan PNG)
 ├── antidetect/                      # Paket utama Python
 │   ├── __main__.py                  # Titik masuk perintah CLI
-│   ├── api.py                       # HTTP server Local API v2 (:53200)
+│   ├── api.py                       # HTTP server Local API v2 (:53200) & static UI server
 │   ├── bookmarks.py                 # Ekstraksi dan injeksi Default/Bookmarks
 │   ├── cookies.py                   # Dekripsi dan enkripsi SQLite Cookies v10
 │   ├── extensions.py                # Manajemen paket ekstensi lokal
 │   ├── iximport.py                  # Modul pengurai arsip ekspor ixBrowser
-│   ├── launcher.py                  # Orkestrasi proses Chromium, wrapper, dan gost
+│   ├── kernels.py                   # Siklus hidup instalasi & manajemen kernel Chromium
+│   ├── launcher.py                  # Orkestrasi proses Chromium, cooldown, journal, dan gost
 │   ├── passwords.py                 # Dekripsi dan injeksi SQLite Login Data
 │   ├── store.py                     # Lapisan database lokal SQLite & sync outbox
 │   ├── sync_agent.py                # Agen sinkronisasi klien & thread heartbeat lease
 │   ├── sync_crypto.py               # Enkripsi amplop AES-256-GCM & penurunan kunci
 │   └── sync_server.py               # Server sinkronisasi mandiri (:53210)
 ├── docs/                            # Dokumentasi teknis dan rencana arsitektur
-│   └── SYNC-PLAN.md                 # Spesifikasi lengkap sinkronisasi terdistribusi
-├── scripts/                         # Skrip utilitas, pengujian, dan layanan
+├── scripts/                         # Skrip utilitas, pemasangan kernel, dan pengujian
+│   ├── build-deb.sh                 # Pembangun paket Debian (.deb)
+│   ├── cloakdesk-app.sh             # Peluncur aplikasi desktop standalone
 │   ├── fetch-gost.sh                # Pemasang binary gost
-│   ├── test-sync.py                 # Pengujian otomatis seluruh alur sinkronisasi
-│   ├── test-ixbrowser-import.py     # Pengujian impor ekspor ixBrowser
-│   ├── selftest.py                  # Verifikasi integrasi SDK ixBrowser
+│   ├── install-kernel.sh            # Pemasang kernel Chromium tambahan
+│   ├── test-session-preservation.py # Pengujian preservasi sesi & cooldown 30 detik
 │   └── antidetect-sync-server.service # Berkas unit systemd untuk VPS
 ├── ui/                              # Frontend Vue 3 + Element Plus
-│   ├── src/views/Profiles.vue       # Tabel profil, badge lease, aksi buka/tutup
+│   ├── src/views/Profiles.vue       # Tabel profil, countdown cooldown, aksi buka/tutup
 │   ├── src/views/Settings.vue       # Halaman pengaturan & kartu sync server
 │   └── src/App.vue                  # Shell aplikasi & indikator sync topbar
 ├── Dockerfile.sync-server           # Kontainer Docker server sinkronisasi
